@@ -305,7 +305,81 @@ async function renderShop({ id }) {
 
 let cal = null; // 表示中の年・月と、選んでいる日
 
-async function renderCalendar() {
+// 左右のスワイプで月を移動する仕組み。
+// 横に動いたときだけスワイプと判断し、縦に動いたときは普通の画面スクロールに任せる。
+function setupSwipe(stage, pane, onCommit) {
+  let pointerId = null;
+  let startX = 0;
+  let startY = 0;
+  let moved = 0;
+  let tracking = false;   // 指を置いている最中か
+  let horizontal = false; // 横スワイプだと確定したか
+  let swiped = false;     // スワイプ後の誤タップを防ぐ目印
+
+  const width = () => stage.clientWidth || 1;
+
+  function reset(animate) {
+    pane.style.transition = animate ? '' : 'none';
+    pane.style.transform = '';
+    pane.style.opacity = '';
+  }
+
+  stage.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    moved = 0;
+    tracking = true;
+    horizontal = false;
+    swiped = false;
+    reset(false);
+  });
+
+  stage.addEventListener('pointermove', (event) => {
+    if (!tracking || event.pointerId !== pointerId) return;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+
+    // 最初の数ピクセルで「横スワイプ」か「縦スクロール」かを見分ける
+    if (!horizontal) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      if (Math.abs(dy) >= Math.abs(dx)) { tracking = false; return; }
+      horizontal = true;
+      swiped = true;
+      stage.setPointerCapture?.(pointerId);
+    }
+
+    moved = dx;
+    // 指の動きより少し控えめに動かすと、ゴムのような手応えになる
+    pane.style.transform = `translateX(${dx * 0.55}px)`;
+    pane.style.opacity = String(Math.max(0.4, 1 - Math.abs(dx) / width()));
+  });
+
+  function finish(event) {
+    if (event && pointerId !== null && event.pointerId !== pointerId) return;
+    const wasHorizontal = horizontal;
+    const distance = moved;
+    tracking = false;
+    horizontal = false;
+    pointerId = null;
+    if (!wasHorizontal) return;
+
+    // 画面幅の4分の1、または60px以上動かしたら月を移動する
+    const threshold = Math.min(width() / 4, 60);
+    if (Math.abs(distance) >= threshold) onCommit(distance < 0 ? 1 : -1);
+    else reset(true);
+  }
+
+  stage.addEventListener('pointerup', finish);
+  stage.addEventListener('pointercancel', finish);
+  // スワイプ直後のタップで日付が選ばれてしまうのを防ぐ
+  stage.addEventListener('click', (event) => {
+    if (swiped) { event.stopPropagation(); event.preventDefault(); swiped = false; }
+  }, true);
+}
+
+async function renderCalendar({ dir = 0 } = {}) {
   const today = todayStr();
   if (!cal) {
     const t = new Date();
@@ -355,10 +429,14 @@ async function renderCalendar() {
       <button type="button" class="cal-arrow" data-move="1" aria-label="次の月">›</button>
     </div>
     ${isThisMonth ? '' : '<button type="button" class="cal-back-today" data-move="today">今月に戻る</button>'}
-    <div class="cal-week" aria-hidden="true">
-      ${[...'日月火水木金土'].map((w, i) => `<span class="dow-${i}">${w}</span>`).join('')}
+    <div class="cal-stage" id="cal-stage">
+      <div class="cal-week" aria-hidden="true">
+        ${[...'日月火水木金土'].map((w, i) => `<span class="dow-${i}">${w}</span>`).join('')}
+      </div>
+      <div class="cal-pane${dir ? (dir > 0 ? ' slide-from-right' : ' slide-from-left') : ''}">
+        <div class="cal-grid">${cells}</div>
+      </div>
     </div>
-    <div class="cal-grid">${cells}</div>
 
     <section class="day-panel">
       <h2 class="section-title">${formatDate(cal.selected)}</h2>
@@ -368,17 +446,18 @@ async function renderCalendar() {
       <a class="btn btn-ghost btn-block" href="#/new?date=${cal.selected}">この日の記録を追加</a>
     </section>`;
 
+  // 月を移動する（delta = -1で前の月、+1で次の月、'today'で今月）
+  function moveMonth(delta) {
+    const target = delta === 'today' ? new Date() : new Date(cal.y, cal.m + Number(delta), 1);
+    cal.y = target.getFullYear();
+    cal.m = target.getMonth();
+    const targetPrefix = `${cal.y}-${pad2(cal.m + 1)}`;
+    cal.selected = targetPrefix === today.slice(0, 7) ? today : `${targetPrefix}-01`;
+    renderCalendar({ dir: delta === 'today' ? 0 : Number(delta) });
+  }
+
   app.querySelectorAll('[data-move]').forEach((btn) => {
-    btn.onclick = () => {
-      let target;
-      if (btn.dataset.move === 'today') target = new Date();
-      else target = new Date(cal.y, cal.m + Number(btn.dataset.move), 1);
-      cal.y = target.getFullYear();
-      cal.m = target.getMonth();
-      const targetPrefix = `${cal.y}-${pad2(cal.m + 1)}`;
-      cal.selected = targetPrefix === today.slice(0, 7) ? today : `${targetPrefix}-01`;
-      renderCalendar();
-    };
+    btn.onclick = () => moveMonth(btn.dataset.move);
   });
 
   app.querySelectorAll('.cal-cell[data-date]').forEach((cell) => {
@@ -387,6 +466,9 @@ async function renderCalendar() {
       renderCalendar();
     };
   });
+
+  const stage = $('#cal-stage');
+  setupSwipe(stage, stage.querySelector('.cal-pane'), moveMonth);
 }
 
 /* ===================== 記録する・編集する ===================== */

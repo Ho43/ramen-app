@@ -627,6 +627,33 @@ textarea { resize: vertical; }
   cursor: pointer;
 }
 
+/* スワイプを受け取る場所。
+   touch-action: pan-y は「縦スクロールはブラウザに任せ、
+   横の動きはアプリ側で扱う」という指定。 */
+.cal-stage {
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.cal-pane {
+  transition: transform 0.22s ease-out, opacity 0.22s ease-out;
+  will-change: transform;
+}
+
+/* 月を切り替えたときに、横から滑り込む動き */
+.cal-pane.slide-from-right { animation: slide-from-right 0.22s ease-out; }
+.cal-pane.slide-from-left { animation: slide-from-left 0.22s ease-out; }
+
+@keyframes slide-from-right {
+  from { transform: translateX(36%); opacity: 0.3; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slide-from-left {
+  from { transform: translateX(-36%); opacity: 0.3; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
 .cal-week,
 .cal-grid {
   display: grid;
