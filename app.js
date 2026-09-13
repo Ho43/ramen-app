@@ -141,7 +141,7 @@ function header(title, { back = '#/', backLabel = 'ホーム' } = {}) {
 function recordRow(record, main, sub) {
   return `
     <li>
-      <a class="rec-row" href="#/edit/${record.id}">
+      <a class="rec-row${record.score >= 90 ? ' is-guilty' : ''}" href="#/edit/${record.id}">
         <span class="rec-date">${shortDate(record.date)}</span>
         <span class="rec-main">
           <span class="rec-title">${esc(main)}</span>
@@ -154,6 +154,71 @@ function recordRow(record, main, sub) {
 
 const noImage = '<span class="noimage">No Image</span>';
 
+/* ===================== マスコット「どんぶり先輩」 ===================== */
+
+// 点数を4段階の表情に分ける
+function faceTier(score) {
+  if (score >= 90) return 3; // ギルティ
+  if (score >= 70) return 2; // にっこり
+  if (score >= 40) return 1; // ふつう
+  return 0;                  // しょんぼり
+}
+
+const TIER_WORD = ['うーむ…', 'ふつう', 'うまい', 'ギルティ！'];
+
+// きらきらした目（4方向にとがった星）
+function sparkle(cx, cy, s) {
+  const d = s * 0.28;
+  return `<path d="M${cx} ${cy - s} L${cx + d} ${cy - d} L${cx + s} ${cy} L${cx + d} ${cy + d} L${cx} ${cy + s} L${cx - d} ${cy + d} L${cx - s} ${cy} L${cx - d} ${cy - d} Z" fill="#F2A007"/>`;
+}
+
+// 表情ごとの目と口
+function face(tier) {
+  if (tier === 3) {
+    return sparkle(46, 86, 9) + sparkle(74, 86, 9)
+      + '<path d="M49 94 Q60 108 71 94 Z" fill="#8A2419"/>';
+  }
+  if (tier === 2) {
+    return '<path d="M40 89 Q46 81 52 89" fill="none" stroke="#1C1A17" stroke-width="3" stroke-linecap="round"/>'
+      + '<path d="M68 89 Q74 81 80 89" fill="none" stroke="#1C1A17" stroke-width="3" stroke-linecap="round"/>'
+      + '<path d="M52 95 Q60 103 68 95" fill="none" stroke="#1C1A17" stroke-width="3" stroke-linecap="round"/>';
+  }
+  if (tier === 1) {
+    return '<circle cx="46" cy="87" r="4.5" fill="#1C1A17"/><circle cx="74" cy="87" r="4.5" fill="#1C1A17"/>'
+      + '<path d="M53 95 Q60 100 67 95" fill="none" stroke="#1C1A17" stroke-width="3" stroke-linecap="round"/>';
+  }
+  return '<circle cx="46" cy="88" r="4.5" fill="#1C1A17"/><circle cx="74" cy="88" r="4.5" fill="#1C1A17"/>'
+    + '<path d="M53 99 Q60 93 67 99" fill="none" stroke="#1C1A17" stroke-width="3" stroke-linecap="round"/>'
+    + '<path d="M88 78 Q84 85 88 88 Q92 85 88 78 Z" fill="#7FB4E8"/>';
+}
+
+// どんぶり先輩本体。湯気はCSSでゆらゆら揺れる
+function mascot(score) {
+  const tier = faceTier(score);
+  return `<svg class="mascot" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path class="steam" d="M44 64 Q36 50 44 36" fill="none" stroke="#EFE9DA" stroke-width="5" stroke-linecap="round"/>
+    <path class="steam steam-b" d="M60 60 Q52 42 60 26" fill="none" stroke="#EFE9DA" stroke-width="5" stroke-linecap="round"/>
+    <path class="steam steam-c" d="M76 64 Q68 50 76 36" fill="none" stroke="#EFE9DA" stroke-width="5" stroke-linecap="round"/>
+    <path d="M20 70 h80 a40 34 0 0 1 -80 0 z" fill="#EFE9DA"/>
+    <rect x="26" y="76" width="68" height="10" fill="#C0392B"/>
+    <rect x="47" y="104" width="26" height="6" rx="2" fill="#EFE9DA"/>
+    ${face(tier)}
+  </svg>`;
+}
+
+// 90点以上で保存したときの演出
+function guiltyFlash(message) {
+  return new Promise((resolve) => {
+    const el = document.createElement('div');
+    el.className = 'guilty-flash';
+    el.innerHTML = `<div style="text-align:center">${mascot(100)}
+      <p class="guilty-word">ギルティ！</p>
+      <p class="guilty-sub">${esc(message)}</p></div>`;
+    document.body.appendChild(el);
+    setTimeout(() => { el.remove(); resolve(); }, 1600);
+  });
+}
+
 /* ===================== ホーム ===================== */
 
 async function renderHome() {
@@ -161,6 +226,20 @@ async function renderHome() {
   const thisMonth = todayStr().slice(0, 7);
   const monthCount = records.filter((r) => r.date.startsWith(thisMonth)).length;
   const recent = [...records].sort(byNewest).slice(0, 5);
+
+  // どんぶり先輩は「最後に食べた一杯」の点数に反応する
+  const last = recent[0];
+  const talk = last
+    ? [
+        'うーむ、次に期待だな。',
+        'ふむ、悪くない一杯だ。',
+        'いい顔をしている。うまかったんだな。',
+        'その点数……ギルティだな。',
+      ][faceTier(last.score)]
+    : 'まずは一杯、記録してみろ。';
+  const talkSub = last
+    ? `${shopName(shopMap, last.shopId)}・${last.score}点`
+    : '記録するボタンから始められる';
 
   app.innerHTML = `
     <section class="home">
@@ -170,6 +249,11 @@ async function renderHome() {
           ? `今月 ${monthCount}杯　通算 ${records.length}杯　${shops.length}店`
           : 'まだ記録がありません。最初の一杯を記録しましょう。'}
       </p>
+
+      <div class="senpai">
+        ${mascot(last?.score ?? 50)}
+        <p class="senpai-talk">${esc(talk)}<small>${esc(talkSub)}</small></p>
+      </div>
 
       <nav class="tickets">
         <a class="ticket ticket-main" href="#/new">
@@ -533,11 +617,17 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
 
       <div class="field">
         <label for="f-score">評価</label>
-        <div class="score">
-          <button type="button" class="step" data-step="-1" aria-label="1点下げる">−</button>
-          <input id="f-score" type="range" min="0" max="100" step="1" value="${score}">
-          <button type="button" class="step" data-step="1" aria-label="1点上げる">＋</button>
-          <output id="f-score-out" for="f-score">${score}</output><span class="score-unit">点</span>
+        <div class="score-box${score >= 90 ? ' is-guilty' : ''}" id="f-score-box">
+          <div class="score-head">
+            <span id="f-mascot">${mascot(score)}</span>
+            <span class="score-read"><output id="f-score-out" for="f-score">${score}</output><span class="score-unit">点</span></span>
+            <span class="score-word" id="f-score-word">${TIER_WORD[faceTier(score)]}</span>
+          </div>
+          <div class="score">
+            <button type="button" class="step" data-step="-1" aria-label="1点下げる">−</button>
+            <input id="f-score" type="range" min="0" max="100" step="1" value="${score}">
+            <button type="button" class="step" data-step="1" aria-label="1点上げる">＋</button>
+          </div>
         </div>
       </div>
 
@@ -599,10 +689,24 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
   updateShopUI();
 
   // --- 評価（0〜100点） ---
+  const scoreBox = $('#f-score-box');
+  const mascotSlot = $('#f-mascot');
+  const scoreWord = $('#f-score-word');
+  let shownTier = faceTier(score);
+
   function setScore(value) {
     const n = Math.max(0, Math.min(100, Math.round(value)));
     scoreRange.value = n;
     scoreOut.textContent = n;
+
+    // 表情が変わるときだけ描き直す（毎回描くと湯気の動きが止まるため）
+    const tier = faceTier(n);
+    if (tier !== shownTier) {
+      shownTier = tier;
+      mascotSlot.innerHTML = mascot(n);
+      scoreWord.textContent = TIER_WORD[tier];
+      scoreBox.classList.toggle('is-guilty', tier === 3);
+    }
   }
   scoreRange.oninput = () => setScore(Number(scoreRange.value));
   app.querySelectorAll('[data-step]').forEach((btn) => {
@@ -708,13 +812,18 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       askPersist();
 
+      const name = shop?.name ?? shops.find((s) => s.id === shopId)?.name;
+      const nth = (counts.get(shopId) ?? 0) + 1;
+
+      if (saved.score >= 90) {
+        await guiltyFlash(isEdit ? `${name}・${saved.score}点` : `${name}（${nth}回目）・${saved.score}点`);
+      }
+
       if (isEdit) {
-        toast('変更を保存しました');
+        if (saved.score < 90) toast('変更を保存しました');
         goBack();
       } else {
-        const name = shop?.name ?? shops.find((s) => s.id === shopId)?.name;
-        const nth = (counts.get(shopId) ?? 0) + 1;
-        toast(`${name}に記録しました（${nth}回目）`);
+        if (saved.score < 90) toast(`${name}に記録しました（${nth}回目）`);
         location.replace('#/');
       }
     } catch (err) {
