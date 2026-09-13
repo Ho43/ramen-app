@@ -141,7 +141,7 @@ function header(title, { back = '#/', backLabel = 'ホーム' } = {}) {
 function recordRow(record, main, sub) {
   return `
     <li>
-      <a class="rec-row${record.score >= 90 ? ' is-guilty' : ''}" href="#/edit/${record.id}">
+      <a class="rec-row${record.score >= GUILTY ? ' is-guilty' : ''}" href="#/edit/${record.id}">
         <span class="rec-date">${shortDate(record.date)}</span>
         <span class="rec-main">
           <span class="rec-title">${esc(main)}</span>
@@ -154,59 +154,80 @@ function recordRow(record, main, sub) {
 
 const noImage = '<span class="noimage">No Image</span>';
 
-/* ===================== マスコット「どんぶり先輩」 ===================== */
+/* ===================== マスコット「ギルチキ」 ===================== */
 
-// 点数を4段階の表情に分ける
+const GUILTY = 95; // この点数以上が「ギルティ」
+
+// 点数を4段階に分ける
 function faceTier(score) {
-  if (score >= 90) return 3; // ギルティ
-  if (score >= 70) return 2; // にっこり
-  if (score >= 40) return 1; // ふつう
-  return 0;                  // しょんぼり
+  if (score >= GUILTY) return 3; // ギルティ
+  if (score >= 70) return 2;     // うまい
+  if (score >= 40) return 1;     // ふつう
+  return 0;                      // なんす
 }
 
-const TIER_WORD = ['うーむ…', 'ふつう', 'うまい', 'ギルティ！'];
+const TIER_WORD = ['なんす', 'ふつう', 'うまい', 'ギルティ！'];
 
-// きらきらした目（4方向にとがった星）
-function sparkle(cx, cy, s) {
-  const d = s * 0.28;
-  return `<path d="M${cx} ${cy - s} L${cx + d} ${cy - d} L${cx + s} ${cy} L${cx + d} ${cy + d} L${cx} ${cy + s} L${cx - d} ${cy + d} L${cx - s} ${cy} L${cx - d} ${cy - d} Z" fill="#F2A007"/>`;
-}
+const TIER_TALK = [
+  ['なんす。次に期待。', 'こういう日もある。', 'まあ、次だ。'],
+  ['悪くない。', 'ふつうにアリ。', '安定してる。'],
+  ['いいじゃん。', 'うまかったな。', '当たりだ。'],
+  ['ギルティ！！！', '完全にギルティ。', 'これはもう罪。'],
+];
 
-// 表情ごとの目と口
-function face(tier) {
-  if (tier === 3) {
-    return sparkle(46, 86, 9) + sparkle(74, 86, 9)
-      + '<path d="M49 94 Q60 108 71 94 Z" fill="#8A2419"/>';
-  }
-  if (tier === 2) {
-    return '<path d="M40 89 Q46 81 52 89" fill="none" stroke="#1C1A17" stroke-width="3" stroke-linecap="round"/>'
-      + '<path d="M68 89 Q74 81 80 89" fill="none" stroke="#1C1A17" stroke-width="3" stroke-linecap="round"/>'
-      + '<path d="M52 95 Q60 103 68 95" fill="none" stroke="#1C1A17" stroke-width="3" stroke-linecap="round"/>';
-  }
-  if (tier === 1) {
-    return '<circle cx="46" cy="87" r="4.5" fill="#1C1A17"/><circle cx="74" cy="87" r="4.5" fill="#1C1A17"/>'
-      + '<path d="M53 95 Q60 100 67 95" fill="none" stroke="#1C1A17" stroke-width="3" stroke-linecap="round"/>';
-  }
-  return '<circle cx="46" cy="88" r="4.5" fill="#1C1A17"/><circle cx="74" cy="88" r="4.5" fill="#1C1A17"/>'
-    + '<path d="M53 99 Q60 93 67 99" fill="none" stroke="#1C1A17" stroke-width="3" stroke-linecap="round"/>'
-    + '<path d="M88 78 Q84 85 88 88 Q92 85 88 78 Z" fill="#7FB4E8"/>';
-}
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
 
-// どんぶり先輩本体。湯気はCSSでゆらゆら揺れる
+// 絵は1枚だけ。点数による違いは、傾き・跳ね・きらきら・光で表す（見た目はCSS側）
 function mascot(score) {
   const tier = faceTier(score);
-  return `<svg class="mascot" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <path class="steam" d="M44 64 Q36 50 44 36" fill="none" stroke="#EFE9DA" stroke-width="5" stroke-linecap="round"/>
-    <path class="steam steam-b" d="M60 60 Q52 42 60 26" fill="none" stroke="#EFE9DA" stroke-width="5" stroke-linecap="round"/>
-    <path class="steam steam-c" d="M76 64 Q68 50 76 36" fill="none" stroke="#EFE9DA" stroke-width="5" stroke-linecap="round"/>
-    <path d="M20 70 h80 a40 34 0 0 1 -80 0 z" fill="#EFE9DA"/>
-    <rect x="26" y="76" width="68" height="10" fill="#C0392B"/>
-    <rect x="47" y="104" width="26" height="6" rx="2" fill="#EFE9DA"/>
-    ${face(tier)}
-  </svg>`;
+  const sparks = tier >= 2
+    ? '<i class="spark s1"></i><i class="spark s2"></i><i class="spark s3"></i>'
+    : '';
+  return `<span class="chiki chiki-t${tier}"><img src="./giruchiki.png" alt="" draggable="false">${sparks}</span>`;
 }
 
-// 90点以上で保存したときの演出
+// 指定日から何日連続で記録があるかを数える
+function streakDays(records, endDate) {
+  const days = new Set(records.map((r) => r.date));
+  const d = new Date(`${endDate}T00:00:00`);
+  let n = 0;
+  while (days.has(toDateStr(d))) {
+    n += 1;
+    d.setDate(d.getDate() - 1);
+  }
+  return n;
+}
+
+// ホームでギルチキが話す一言を決める。
+// 珍しい出来事ほど先に出し、当てはまらなければ点数に応じた一言を返す。
+function chikiTalk(records, last) {
+  if (!last) return '一杯目、待ってる。';
+
+  const total = records.length;
+  if (total === 100) return '100杯。おめでとう。';
+  if (total === 50) return '50杯。数字がもう怖い。';
+  if (total === 10) return '10杯突破。';
+
+  const shopCount = records.filter((r) => r.shopId === last.shopId).length;
+  if (shopCount === 10) return '10回目。もう家だろ。';
+  if (shopCount === 5) return '常連だな。';
+  if (shopCount === 3) return 'またここか。好きだな。';
+
+  const streak = streakDays(records, last.date);
+  if (streak >= 5) return 'もう生活だな。';
+  if (streak >= 3) return `${streak}日続けて……ギルティ。`;
+
+  const hour = new Date(last.createdAt).getHours();
+  if (hour >= 2 && hour < 5) return 'もう朝じゃないか。';
+  if (hour >= 22 || hour < 2) return 'こんな時間に……ギルティ。';
+  if (hour >= 5 && hour < 10) return '朝から行ったのか。';
+
+  if (shopCount === 1) return '新規開拓だな。';
+  if (streak === 2) return '2日連続か。';
+  return pick(TIER_TALK[faceTier(last.score)]);
+}
+
+// 95点以上で保存したときの演出
 function guiltyFlash(message) {
   return new Promise((resolve) => {
     const el = document.createElement('div');
@@ -227,16 +248,9 @@ async function renderHome() {
   const monthCount = records.filter((r) => r.date.startsWith(thisMonth)).length;
   const recent = [...records].sort(byNewest).slice(0, 5);
 
-  // どんぶり先輩は「最後に食べた一杯」の点数に反応する
+  // ギルチキは最後に食べた一杯に反応する
   const last = recent[0];
-  const talk = last
-    ? [
-        'うーむ、次に期待だな。',
-        'ふむ、悪くない一杯だ。',
-        'いい顔をしている。うまかったんだな。',
-        'その点数……ギルティだな。',
-      ][faceTier(last.score)]
-    : 'まずは一杯、記録してみろ。';
+  const talk = chikiTalk(records, last);
   const talkSub = last
     ? `${shopName(shopMap, last.shopId)}・${last.score}点`
     : '記録するボタンから始められる';
@@ -250,9 +264,9 @@ async function renderHome() {
           : 'まだ記録がありません。最初の一杯を記録しましょう。'}
       </p>
 
-      <div class="senpai">
+      <div class="greet">
         ${mascot(last?.score ?? 50)}
-        <p class="senpai-talk">${esc(talk)}<small>${esc(talkSub)}</small></p>
+        <p class="greet-talk">${esc(talk)}<small>${esc(talkSub)}</small></p>
       </div>
 
       <nav class="tickets">
@@ -617,7 +631,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
 
       <div class="field">
         <label for="f-score">評価</label>
-        <div class="score-box${score >= 90 ? ' is-guilty' : ''}" id="f-score-box">
+        <div class="score-box${score >= GUILTY ? ' is-guilty' : ''}" id="f-score-box">
           <div class="score-head">
             <span id="f-mascot">${mascot(score)}</span>
             <span class="score-read"><output id="f-score-out" for="f-score">${score}</output><span class="score-unit">点</span></span>
@@ -815,15 +829,15 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       const name = shop?.name ?? shops.find((s) => s.id === shopId)?.name;
       const nth = (counts.get(shopId) ?? 0) + 1;
 
-      if (saved.score >= 90) {
+      if (saved.score >= GUILTY) {
         await guiltyFlash(isEdit ? `${name}・${saved.score}点` : `${name}（${nth}回目）・${saved.score}点`);
       }
 
       if (isEdit) {
-        if (saved.score < 90) toast('変更を保存しました');
+        if (saved.score < GUILTY) toast('変更を保存しました');
         goBack();
       } else {
-        if (saved.score < 90) toast(`${name}に記録しました（${nth}回目）`);
+        if (saved.score < GUILTY) toast(`${name}に記録しました（${nth}回目）`);
         location.replace('#/');
       }
     } catch (err) {
