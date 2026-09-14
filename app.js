@@ -684,6 +684,28 @@ const COSTUMES = [
 
 const costumeById = (id) => COSTUMES.find((c) => c.id === id) ?? null;
 
+/* ===================== 名前バッジ（共有した杯数） =====================
+   共有した記録の数（他の人にも見えている数）に応じて、0〜3段階のバッジが解放される。
+   どれを表示するかは本人が選べる（解放していない段階は選べない）。 */
+
+const BADGE_STEP = 5;   // 何杯ごとに1段階上がるか
+const BADGE_MAX = 3;    // 用意してある絵の数
+
+// 共有した杯数から、解放されている最高の段階を出す（0なら未解放）
+function badgeTierForCount(count) {
+  return Math.min(BADGE_MAX, Math.floor(count / BADGE_STEP));
+}
+
+// あと何杯でその段階に届くか
+function badgeRemaining(count, tier) {
+  return Math.max(0, tier * BADGE_STEP - count);
+}
+
+function badgeImg(tier, extraClass = '') {
+  if (!tier) return '';
+  return `<img class="name-badge ${extraClass}" src="./badge${tier}.png" alt="バッジ ${tier}">`;
+}
+
 let chikiState = { points: 0, lastFed: null, owned: [], equipped: null, redeemedCodes: [] };
 let chikiReady = false;
 
@@ -2539,6 +2561,11 @@ async function renderUser({ id }) {
   const showZukan = profile?.showZukan !== false;
   const showCalendar = profile?.showCalendar !== false;
 
+  // 表示するバッジ：本人が選んだ段階。ただし今解放されている段階までに収める
+  // （共有をやめて杯数が減っていた場合、選んでいた段階が使えなくなることがあるため）
+  const eligibleTier = badgeTierForCount(posts.length);
+  const badgeTier = Math.min(profile?.badgeChoice ?? eligibleTier, eligibleTier);
+
   app.innerHTML = header(name, { back: '#/feed', backLabel: 'みんなの記録' }) + `
     <section class="user">
       <div class="user-head">
@@ -2546,7 +2573,7 @@ async function renderUser({ id }) {
           ? `<img src="${profile.avatar}" alt="">`
           : esc(name.slice(0, 1))}</span>
         <div class="user-lines">
-          <h2 class="user-name">${esc(name)}</h2>
+          <h2 class="user-name">${esc(name)}${badgeImg(badgeTier)}</h2>
           ${bio ? `<p class="user-bio">${esc(bio)}</p>` : ''}
         </div>
       </div>
@@ -2965,12 +2992,18 @@ async function renderAccount() {
       return;
     }
     let profile = null;
+    let myCount = 0;
     try {
       profile = await cloud.getProfile(user.uid);
     } catch (err) {
       console.error(err);
     }
-    renderProfileForm(slot, user, profile);
+    try {
+      myCount = (await cloud.getPostsByUser(user.uid)).length;
+    } catch (err) {
+      console.error(err);
+    }
+    renderProfileForm(slot, user, profile, myCount);
   });
 }
 
@@ -3061,8 +3094,10 @@ function authErrorMessage(err) {
   return 'うまくいきませんでした。もう一度お試しください。';
 }
 
-function renderProfileForm(slot, user, profile) {
+function renderProfileForm(slot, user, profile, myCount = 0) {
   const avatarUrl = profile?.avatar ?? null;
+  const eligibleTier = badgeTierForCount(myCount);
+  let badgeChoice = Math.min(profile?.badgeChoice ?? eligibleTier, eligibleTier);
 
   slot.innerHTML = `
     <p class="hint">${esc(user.email)} でログイン中</p>
@@ -3094,6 +3129,12 @@ function renderProfileForm(slot, user, profile) {
       </div>
 
       <div class="field">
+        <span class="label">名前に付けるバッジ</span>
+        <p class="hint">共有した記録${BADGE_STEP}杯ごとに1段階解放される。持っている段階の中から、表示するものを選べる。</p>
+        <ul class="badge-picker" id="badge-picker"></ul>
+      </div>
+
+      <div class="field">
         <span class="label">公開する情報</span>
         <p class="hint">みんなの記録であなたのアイコンを押した人に、何を見せるかを決められます。見せるのは共有した記録だけで、端末の中の記録は公開されません。</p>
         <label class="check-row">
@@ -3117,6 +3158,32 @@ function renderProfileForm(slot, user, profile) {
   const removeBtn = $('#pf-photo-remove');
   const errorEl = $('#pf-error');
   let avatarChange; // undefined = 変更なし / null = 外す / 'data:...' = 新しい画像
+
+  // バッジの選択肢を描く（「なし」＋ 解放済みの段階 ＋ まだ届いていない段階）
+  function drawBadgePicker() {
+    const list = $('#badge-picker');
+    const rows = [`
+      <li class="badge-choice${badgeChoice === 0 ? ' is-selected' : ''}" data-badge="0">
+        <span class="bc-thumb bc-thumb-none">なし</span>
+        <span class="bc-label">なし</span>
+      </li>`];
+    for (let tier = 1; tier <= BADGE_MAX; tier += 1) {
+      const locked = tier > eligibleTier;
+      rows.push(`
+        <li class="badge-choice${locked ? ' is-locked' : ''}${badgeChoice === tier ? ' is-selected' : ''}" data-badge="${tier}">
+          <span class="bc-thumb">${badgeImg(tier)}</span>
+          <span class="bc-label">${locked ? `あと${badgeRemaining(myCount, tier)}杯` : `${tier}段階目`}</span>
+        </li>`);
+    }
+    list.innerHTML = rows.join('');
+    list.querySelectorAll('.badge-choice:not(.is-locked)').forEach((el) => {
+      el.onclick = () => {
+        badgeChoice = Number(el.dataset.badge);
+        drawBadgePicker();
+      };
+    });
+  }
+  drawBadgePicker();
 
   function showAvatar(url) {
     preview.hidden = !url;
@@ -3157,6 +3224,7 @@ function renderProfileForm(slot, user, profile) {
         bio: $('#pf-bio').value.trim(),
         showZukan: $('#pf-zukan').checked,
         showCalendar: $('#pf-calendar').checked,
+        badgeChoice,
       };
       if (avatarChange !== undefined) next.avatar = avatarChange; // null なら外す
       await cloud.saveProfile(user.uid, next);
