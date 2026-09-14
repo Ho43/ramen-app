@@ -1011,37 +1011,87 @@ textarea { resize: vertical; }
   color: var(--muted);
 }
 
-/* ギルティボタン（いいねの代わり） */
+/* ギルティボタン（いいねの代わり）。
+   朱色の判子を押すイメージ。押した瞬間だけ、まわりに光が飛ぶ。 */
 .guilty-btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
-  padding: 0 14px;
-  border: 1.5px solid var(--line);
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--muted);
+  padding: 2px;
+  border: none;
+  background: none;
   font: inherit;
   cursor: pointer;
-  transition: transform 0.1s;
 }
 
-.guilty-btn:active { transform: scale(0.94); }
-
-.gb-word {
+.gb-stamp {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--muted);
   font-family: var(--mincho);
-  font-size: 15px;
+  font-size: 22px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  line-height: 1;
+  /* 明朝体をより太く見せる */
+  -webkit-text-stroke: 0.7px currentColor;
+  transition: background 0.16s, border-color 0.16s, color 0.16s;
 }
 
-.gb-count { font-size: 14px; font-variant-numeric: tabular-nums; }
+.gb-count {
+  color: var(--muted);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
 
-.guilty-btn.is-on {
+.guilty-btn.is-on .gb-stamp {
   border-color: var(--shu);
   background: var(--shu);
   color: #FFF3EC;
+}
+
+.guilty-btn.is-on .gb-count { color: var(--shu); }
+
+/* コメントに付けるときは小さめ */
+.guilty-btn.is-mini .gb-stamp {
+  width: 28px;
+  height: 28px;
+  font-size: 15px;
+  -webkit-text-stroke: 0.5px currentColor;
+}
+
+.guilty-btn.is-mini .gb-count { font-size: 13px; }
+
+/* きらめき。ふだんは見えず、押した瞬間だけ外へ飛ぶ */
+.gb-spark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  background: var(--yolk);
+  clip-path: polygon(50% 0, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0 50%, 39% 39%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.guilty-btn.is-burst .gb-spark { animation: spark 0.5s ease-out; }
+
+.gb-spark.s1 { --sx: 0px; --sy: -26px; }
+.gb-spark.s2 { --sx: 24px; --sy: -10px; }
+.gb-spark.s3 { --sx: -24px; --sy: -10px; }
+.gb-spark.s4 { --sx: 14px; --sy: 22px; animation-delay: 0.04s; }
+
+@keyframes spark {
+  0% { opacity: 0; transform: translate(0, 0) scale(0.3); }
+  35% { opacity: 1; transform: translate(calc(var(--sx) * 0.7), calc(var(--sy) * 0.7)) scale(1); }
+  100% { opacity: 0; transform: translate(var(--sx), var(--sy)) scale(0.5); }
 }
 
 /* ---------- コメント ---------- */
@@ -1140,6 +1190,14 @@ textarea { resize: vertical; }
   to { transform: translateX(0); opacity: 1; }
 }
 
+/* スワイプで戻ったとき。上の画面が左から入ってくる */
+.page-slide-back { animation: page-slide-back 0.24s cubic-bezier(0.22, 0.9, 0.3, 1); }
+
+@keyframes page-slide-back {
+  from { transform: translateX(-32%); opacity: 0.4; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
 /* ---------- ボタンを押した感触 ---------- */
 .is-pop { animation: pop 0.24s cubic-bezier(0.2, 1.6, 0.4, 1); }
 
@@ -1149,30 +1207,43 @@ textarea { resize: vertical; }
   100% { transform: scale(1); }
 }
 
-/* ---------- 一覧に出す最新のコメント ---------- */
+/* ---------- 一覧に出す最新のコメント ----------
+   投稿より一段下げて、返信であることが分かるようにしている */
 .post-lastcomment {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 8px;
-  margin: 0 12px 12px;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 12px 12px 44px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-left: 2px solid var(--line);
+  border-radius: 0 10px 10px 0;
   background: var(--surface-2);
   color: inherit;
-  font-size: 13px;
   text-decoration: none;
 }
 
+.post-lastcomment .chip-avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+}
+
+.plc-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
 .plc-who {
-  flex-shrink: 0;
+  font-size: 13px;
   font-weight: 700;
   color: var(--cream);
 }
 
 .plc-text {
-  min-width: 0;
   overflow: hidden;
+  font-size: 13px;
   color: #C9C1B2;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1181,6 +1252,8 @@ textarea { resize: vertical; }
 .plc-more {
   margin-left: auto;
   flex-shrink: 0;
+  align-self: center;
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -1275,24 +1348,6 @@ textarea { resize: vertical; }
 }
 
 .mini-btn.is-quiet { color: var(--muted); }
-
-.mini-guilty {
-  padding: 4px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: none;
-  color: var(--muted);
-  font-family: var(--mincho);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.mini-guilty.is-on {
-  border-color: var(--shu);
-  background: var(--shu);
-  color: #FFF3EC;
-}
 
 /* ---------- ほかの人のページ ---------- */
 .post-user {

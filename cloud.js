@@ -149,7 +149,7 @@ export async function addComment(postId, comment) {
   // 一覧を開くたびにコメントを読みに行かなくて済む。
   await updateDoc(doc(db, 'posts', postId), {
     commentCount: increment(1),
-    lastComment: { nickname: comment.nickname, text: comment.text },
+    lastComment: { nickname: comment.nickname, avatar: comment.avatar ?? null, text: comment.text },
   });
 }
 
@@ -164,7 +164,7 @@ export async function deleteComment(postId, commentId) {
   const newest = rest.docs[0]?.data();
   await updateDoc(doc(db, 'posts', postId), {
     commentCount: increment(-1),
-    lastComment: newest ? { nickname: newest.nickname, text: newest.text } : null,
+    lastComment: newest ? { nickname: newest.nickname, avatar: newest.avatar ?? null, text: newest.text } : null,
   });
 }
 

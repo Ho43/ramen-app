@@ -62,71 +62,110 @@ function goBack(fallback = '#/') {
   else location.hash = fallback;
 }
 
-// 右へスワイプすると前の画面に戻る。
-// 画面のどこから始めても反応するが、次の場所では何もしない：
-//   ・ホーム（これ以上戻るとアプリの外に出てしまう）
-//   ・カレンダーの月送り、写真の切り抜き、スライダー（横の動きを自分で使うため）
-// 登録は起動時に1回だけ（画面ごとに付けると戻りすぎてしまう）。
+// 画面ごとの「ひとつ上」。戻る先は履歴ではなく、この並びで決める。
+// 同じ画面を行ったり来たりしていても、スワイプすれば必ずホームに近づく。
+function parentOf(path) {
+  if (path === '/') return null;                 // ホームではこれ以上戻らない
+  if (path.startsWith('/post/')) return '#/feed';
+  if (path.startsWith('/user/')) return '#/feed';
+  if (path.startsWith('/shop/')) return '#/zukan';
+  if (path === '/account') return '#/settings';
+  return '#/';
+}
+
+function currentPath() {
+  return (location.hash.slice(1) || '/').split('?')[0];
+}
+
+// 右へスワイプするとひとつ上の画面に戻る。
+// カレンダーの月送りと同じで、指に合わせて画面が動き、離すとそのまま流れる。
+// 横の動きを自分で使う場所（カレンダー・切り抜き・スライダー・図鑑）では何もしない。
+// 登録は起動時に1回だけ。
 function enableSwipeBack(target) {
-  const NEED = 80;     // 戻るのに必要な移動量
-  const SLOPE = 1.4;   // 縦より横に、これだけはっきり動いていること
+  const SLOPE = 1.3;   // 縦より横にはっきり動いていること
   let startX = 0;
   let startY = 0;
+  let dx = 0;
   let tracking = false;
   let horizontal = false;
+  let busy = false;    // 流れきるまで次の操作を受けない
+  let lastX = 0;
+  let lastT = 0;
+  let speed = 0;
 
-  // 横の動きを自分で使っている場所から始まったかどうか
+  const width = () => window.innerWidth || 1;
+
   function inBusyArea(node) {
     return Boolean(node?.closest?.('.cal-stage, .cropper, input[type="range"], .zukan'));
   }
 
-  function atHome() {
-    return (location.hash.slice(1) || '/').split('?')[0] === '/';
+  function place(offset, animate) {
+    target.style.transition = animate ? 'transform 0.24s cubic-bezier(0.22, 0.9, 0.3, 1)' : 'none';
+    target.style.transform = offset ? `translateX(${offset}px)` : '';
   }
 
   target.addEventListener('touchstart', (event) => {
-    if (event.touches.length !== 1 || atHome() || inBusyArea(event.target)) {
+    if (busy || event.touches.length !== 1 || !parentOf(currentPath()) || inBusyArea(event.target)) {
       tracking = false;
       return;
     }
     const t = event.touches[0];
     tracking = true;
     horizontal = false;
-    startX = t.clientX;
+    startX = lastX = t.clientX;
     startY = t.clientY;
+    lastT = event.timeStamp;
+    dx = 0;
+    speed = 0;
   }, { passive: true });
 
   target.addEventListener('touchmove', (event) => {
     if (!tracking) return;
     const t = event.touches[0];
-    const dx = t.clientX - startX;
-    const dy = t.clientY - startY;
+    const mx = t.clientX - startX;
+    const my = t.clientY - startY;
 
     if (!horizontal) {
-      if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
-      // 右向きで、縦よりはっきり横に動いたときだけスワイプとみなす
-      if (dx <= 0 || Math.abs(dx) < Math.abs(dy) * SLOPE) { tracking = false; return; }
+      if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+      if (mx <= 0 || Math.abs(mx) < Math.abs(my) * SLOPE) { tracking = false; return; }
       horizontal = true;
       document.body.classList.add('swiping-back');
     }
-    // 指の動きに合わせて画面をずらし、戻れることを伝える
-    target.style.transform = `translateX(${Math.min(dx, 140)}px)`;
-    target.style.opacity = String(Math.max(0.45, 1 - dx / 420));
+
+    dx = mx;
+    const dt = event.timeStamp - lastT;
+    if (dt > 0) speed = (t.clientX - lastX) / dt;
+    lastX = t.clientX;
+    lastT = event.timeStamp;
+    place(dx, false); // 指と同じだけ動かす
   }, { passive: true });
 
-  function end(event) {
+  function end() {
     if (!tracking) return;
     const wasHorizontal = horizontal;
     tracking = false;
     horizontal = false;
     document.body.classList.remove('swiping-back');
-    target.style.transition = 'transform 0.2s ease-out, opacity 0.2s ease-out';
-    target.style.transform = '';
-    target.style.opacity = '';
-    setTimeout(() => { target.style.transition = ''; }, 220);
     if (!wasHorizontal) return;
-    const dx = (event.changedTouches?.[0]?.clientX ?? startX) - startX;
-    if (dx >= NEED) goBack();
+
+    const S = width();
+    const far = dx > S * 0.22;
+    // 素早くはじいたときは短くても戻す。ただし、ゆっくり少し動かしただけでは戻さない
+    const flicked = speed > 0.5 && dx > 44;
+
+    if (far || flicked) {
+      const parent = parentOf(currentPath());
+      if (!parent) { place(0, true); return; }
+      busy = true;
+      place(S, true); // 指の動きの続きとして、画面の外まで流す
+      setTimeout(() => {
+        busy = false;
+        swipedBack = true;  // 次の描画を「戻る向き」の動きにする
+        location.hash = parent;
+      }, 200);
+    } else {
+      place(0, true); // 足りなければ元に戻す
+    }
   }
 
   target.addEventListener('touchend', end);
@@ -1383,29 +1422,39 @@ function avatarChip(nickname, avatar) {
 // ギルティを押すと一覧が描き直されてボタンが作り直されるので、
 // 直前に押したものを覚えておき、描き直したあとにも動きを付け直す。
 let popKey = null;
+let popBurst = false;
 
-function tap(el, key = null) {
+function tap(el, key = null, burst = false) {
   navigator.vibrate?.(12);
   popKey = key;
-  if (key) setTimeout(() => { if (popKey === key) popKey = null; }, 500);
+  popBurst = burst;
+  if (key) setTimeout(() => { if (popKey === key) popKey = null; }, 600);
   if (!el) return;
-  el.classList.remove('is-pop');
+  el.classList.remove('is-pop', 'is-burst');
   void el.offsetWidth; // 連打でも毎回動かすための作り直し
   el.classList.add('is-pop');
+  if (burst) el.classList.add('is-burst'); // 付けたときだけ光らせる
 }
 
 // 描き直した直後に、さっき押したボタンの動きを付け直す
 function restorePop(root) {
   if (!popKey) return;
   const btn = root.querySelector(`[data-guilty="${popKey}"], [data-comment-guilty="${popKey}"]`);
-  if (btn) btn.classList.add('is-pop');
+  if (!btn) return;
+  btn.classList.add('is-pop');
+  if (popBurst) btn.classList.add('is-burst');
 }
 
+// 押した瞬間に飛ぶきらめき（4方向）
+const SPARKS = '<i class="gb-spark s1"></i><i class="gb-spark s2"></i><i class="gb-spark s3"></i><i class="gb-spark s4"></i>';
+
+// ギルティボタン。朱色の判子を押すイメージ
 function guiltyButton(post) {
   const uids = post.guiltyUids ?? [];
   const on = me.user ? uids.includes(me.user.uid) : false;
-  return `<button type="button" class="guilty-btn${on ? ' is-on' : ''}" data-guilty="${post.id}">
-    <span class="gb-word">ギルティ</span>
+  return `<button type="button" class="guilty-btn${on ? ' is-on' : ''}" data-guilty="${post.id}"
+    aria-label="ギルティ ${uids.length}" aria-pressed="${on}">
+    <span class="gb-stamp">罪${SPARKS}</span>
     <span class="gb-count">${uids.length}</span>
   </button>`;
 }
@@ -1451,8 +1500,11 @@ function postCard(post) {
       </div>
       ${post.lastComment
         ? `<a class="post-lastcomment" href="#/post/${post.id}">
-             <span class="plc-who">${esc(post.lastComment.nickname || '名無し')}</span>
-             <span class="plc-text">${esc(post.lastComment.text)}</span>
+             ${avatarChip(post.lastComment.nickname, post.lastComment.avatar)}
+             <span class="plc-body">
+               <span class="plc-who">${esc(post.lastComment.nickname || '名無し')}</span>
+               <span class="plc-text">${esc(post.lastComment.text)}</span>
+             </span>
              ${post.commentCount > 1 ? `<span class="plc-more">他${post.commentCount - 1}件</span>` : ''}
            </a>`
         : ''}
@@ -1497,7 +1549,7 @@ async function renderFeed() {
     event.preventDefault();
     const on = !btn.classList.contains('is-on');
     btn.classList.toggle('is-on', on); // 通信を待たずに見た目を変える
-    tap(btn, btn.dataset.guilty);
+    tap(btn, btn.dataset.guilty, on);
     try {
       await cloud.toggleGuilty(btn.dataset.guilty, me.user.uid, on);
     } catch (err) {
@@ -1589,7 +1641,7 @@ async function renderPost({ id }) {
         btn.onclick = async () => {
           const on = !btn.classList.contains('is-on');
           btn.classList.toggle('is-on', on);
-          tap(btn, post.id);
+          tap(btn, post.id, on);
           try {
             await cloud.toggleGuilty(post.id, me.user.uid, on);
           } catch (err) {
@@ -1634,7 +1686,7 @@ async function renderPost({ id }) {
     if (gBtn) {
       const on = !gBtn.classList.contains('is-on');
       gBtn.classList.toggle('is-on', on);
-      tap(gBtn, gBtn.dataset.commentGuilty);
+      tap(gBtn, gBtn.dataset.commentGuilty, on);
       try {
         await cloud.toggleCommentGuilty(id, gBtn.dataset.commentGuilty, me.user.uid, on);
       } catch (err) {
@@ -1702,8 +1754,10 @@ function commentTree(comments) {
 function commentGuiltyButton(c) {
   const uids = c.guiltyUids ?? [];
   const on = me.user ? uids.includes(me.user.uid) : false;
-  return `<button type="button" class="mini-guilty${on ? ' is-on' : ''}" data-comment-guilty="${c.id}">
-    ギルティ${uids.length ? ` ${uids.length}` : ''}
+  return `<button type="button" class="guilty-btn is-mini${on ? ' is-on' : ''}" data-comment-guilty="${c.id}"
+    aria-label="ギルティ ${uids.length}" aria-pressed="${on}">
+    <span class="gb-stamp">罪${SPARKS}</span>
+    ${uids.length ? `<span class="gb-count">${uids.length}</span>` : ''}
   </button>`;
 }
 
@@ -2350,20 +2404,33 @@ const routes = [
   { path: /^\/user\/([\w@.-]+)$/, view: renderUser },
 ];
 
-// 進んだのか戻ったのかを見分けるため、画面の並び順を覚えておく
-const PAGE_ORDER = ['/', '/feed', '/post/', '/user/', '/zukan', '/calendar', '/shop/', '/new', '/edit/', '/settings', '/account'];
+// 進んだのか戻ったのかを見分けるため、ホームからの遠さを数えておく
 let lastDepth = 0;
+let swipedBack = false; // スワイプで戻ってきたところかどうか
 
 function depthOf(path) {
-  if (path === '/') return 0;
-  if (path === '/feed') return 1;
-  return 2;
+  let n = 0;
+  let p = path;
+  while (parentOf(p)) {
+    n += 1;
+    p = parentOf(p).slice(1);
+    if (n > 6) break;
+  }
+  return n;
 }
 
 // 画面を切り替えるときに軽く滑らせる
 function playPageIn(back) {
-  app.classList.remove('page-in', 'page-back');
+  // スワイプでずらした位置を、動きを付けずに戻す（揺れ戻りを防ぐ）
+  app.style.transition = 'none';
+  app.style.transform = '';
+  app.classList.remove('page-in', 'page-back', 'page-slide-back');
   void app.offsetWidth; // 作り直して毎回動かす
+  if (swipedBack) {
+    swipedBack = false;
+    app.classList.add('page-slide-back'); // 上の画面が左から入ってくる
+    return;
+  }
   app.classList.add(back ? 'page-back' : 'page-in');
 }
 
@@ -2400,7 +2467,7 @@ app.addEventListener('click', (event) => {
   if (event.target.closest('[data-action="back"]')) goBack();
 });
 
-enableSwipeBack(app); // 画面の左端からのスワイプで戻れるようにする（登録は1回だけ）
+enableSwipeBack(app); // 右スワイプでひとつ上の画面に戻れるようにする（登録は1回だけ）
 
 window.addEventListener('hashchange', router);
 router();
