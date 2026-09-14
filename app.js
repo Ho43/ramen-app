@@ -108,12 +108,7 @@ function forgetPhotoUrl(photoId) {
 async function resizeImage(file, maxSize = 1280, quality = 0.82) {
   const url = URL.createObjectURL(file);
   try {
-    const img = await new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error('画像を読み込めませんでした'));
-      image.src = url;
-    });
+    const img = await loadImage(url);
     const scale = Math.min(1, maxSize / Math.max(img.naturalWidth, img.naturalHeight));
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(img.naturalWidth * scale);
@@ -125,6 +120,163 @@ async function resizeImage(file, maxSize = 1280, quality = 0.82) {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('画像を読み込めませんでした'));
+    image.src = url;
+  });
+}
+
+/* ===================== 切り抜き（トリミング） ===================== */
+
+// 写真の使う範囲を正方形で選んでもらう。
+// 「決定」で正方形のJPEGを返し、「やめる」なら null を返す。
+const CROP_OUT = 1024; // 書き出す一辺の長さ（ピクセル）
+
+function cropImage(file) {
+  return new Promise(async (resolve) => {
+    const url = URL.createObjectURL(file);
+    let img;
+    try {
+      img = await loadImage(url);
+    } catch {
+      URL.revokeObjectURL(url);
+      resolve(null);
+      return;
+    }
+
+    const host = document.createElement('div');
+    host.className = 'cropper';
+    host.innerHTML = `
+      <div class="crop-head">
+        <button type="button" class="crop-btn" data-crop="cancel">やめる</button>
+        <span class="crop-title">使う範囲を決める</span>
+        <button type="button" class="crop-btn is-ok" data-crop="ok">決定</button>
+      </div>
+      <div class="crop-body">
+        <div class="crop-stage"><img class="crop-img" alt=""></div>
+        <div class="crop-tools">
+          <button type="button" class="step" data-crop="out" aria-label="縮小">−</button>
+          <input class="crop-zoom" type="range" min="1" max="4" step="0.01" value="1" aria-label="拡大">
+          <button type="button" class="step" data-crop="in" aria-label="拡大">＋</button>
+        </div>
+        <p class="crop-hint">指でドラッグすると動かせます。2本指またはスライダーで拡大できます。</p>
+      </div>`;
+    document.body.appendChild(host);
+
+    const stage = host.querySelector('.crop-stage');
+    const view = host.querySelector('.crop-img');
+    const zoom = host.querySelector('.crop-zoom');
+    view.src = url;
+
+    const S = stage.clientWidth;            // 枠の一辺（画面上の大きさ）
+    const nw = img.naturalWidth;
+    const nh = img.naturalHeight;
+    // 倍率1のときに写真全体がちょうど収まるようにする
+    const base = Math.min(S / nw, S / nh);
+
+    let k = 1;    // 拡大の倍率
+    let tx = 0;   // 写真の左上が枠のどこにあるか
+    let ty = 0;
+
+    function apply() {
+      const w = nw * base * k;
+      const h = nh * base * k;
+      // 枠より小さい向きは中央に、大きい向きは枠の外に隙間ができないように収める
+      tx = w <= S ? (S - w) / 2 : Math.min(0, Math.max(S - w, tx));
+      ty = h <= S ? (S - h) / 2 : Math.min(0, Math.max(S - h, ty));
+      view.style.width = `${w}px`;
+      view.style.height = `${h}px`;
+      view.style.transform = `translate(${tx}px, ${ty}px)`;
+      zoom.value = k;
+    }
+
+    // 指定した点を動かさずに拡大率だけ変える
+    function zoomTo(next, cx = S / 2, cy = S / 2) {
+      const clamped = Math.max(1, Math.min(4, next));
+      const ratio = clamped / k;
+      tx = cx - (cx - tx) * ratio;
+      ty = cy - (cy - ty) * ratio;
+      k = clamped;
+      apply();
+    }
+
+    apply();
+
+    // --- 指の操作（1本でドラッグ、2本でつまんで拡大） ---
+    const points = new Map();
+    let pinch = null;
+
+    stage.addEventListener('pointerdown', (e) => {
+      stage.setPointerCapture(e.pointerId);
+      points.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      pinch = null;
+    });
+
+    stage.addEventListener('pointermove', (e) => {
+      if (!points.has(e.pointerId)) return;
+      e.preventDefault();
+      const prev = points.get(e.pointerId);
+      points.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (points.size >= 2) {
+        const [a, b] = [...points.values()];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        const box = stage.getBoundingClientRect();
+        const cx = (a.x + b.x) / 2 - box.left;
+        const cy = (a.y + b.y) / 2 - box.top;
+        if (pinch) zoomTo(k * (dist / pinch.dist), cx, cy);
+        pinch = { dist };
+      } else {
+        tx += e.clientX - prev.x;
+        ty += e.clientY - prev.y;
+        apply();
+      }
+    });
+
+    function release(e) {
+      points.delete(e.pointerId);
+      if (points.size < 2) pinch = null;
+    }
+    stage.addEventListener('pointerup', release);
+    stage.addEventListener('pointercancel', release);
+
+    zoom.addEventListener('input', () => zoomTo(Number(zoom.value)));
+
+    // --- ボタン ---
+    function finish(blob) {
+      document.body.classList.remove('no-scroll');
+      host.remove();
+      URL.revokeObjectURL(url);
+      resolve(blob);
+    }
+
+    host.addEventListener('click', async (e) => {
+      const action = e.target.closest('[data-crop]')?.dataset.crop;
+      if (!action) return;
+      if (action === 'in') { zoomTo(k + 0.25); return; }
+      if (action === 'out') { zoomTo(k - 0.25); return; }
+      if (action === 'cancel') { finish(null); return; }
+
+      // 画面で見えている範囲をそのまま正方形に描き出す
+      const canvas = document.createElement('canvas');
+      canvas.width = CROP_OUT;
+      canvas.height = CROP_OUT;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#2A251F'; // 余白が出たときの下地
+      ctx.fillRect(0, 0, CROP_OUT, CROP_OUT);
+      const r = CROP_OUT / S;
+      ctx.drawImage(img, tx * r, ty * r, nw * base * k * r, nh * base * k * r);
+      const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.85));
+      finish(blob);
+    });
+
+    document.body.classList.add('no-scroll');
+  });
 }
 
 /* ===================== 共通パーツ ===================== */
@@ -403,81 +555,145 @@ async function renderShop({ id }) {
 
 let cal = null; // 表示中の年・月と、選んでいる日
 
-// 左右のスワイプで月を移動する仕組み。
-// 横に動いたときだけスワイプと判断し、縦に動いたときは普通の画面スクロールに任せる。
-function setupSwipe(stage, pane, onCommit) {
+// 前月・当月・翌月の3枚を横に並べておき、指の動きに合わせて帯ごと動かす。
+// こうすると、少し動かしただけで隣の月が見えて、操作した手応えが返る。
+function setupSwipe(stage, track, onCommit) {
+  const panes = [...track.children];
   let pointerId = null;
   let startX = 0;
   let startY = 0;
-  let moved = 0;
+  let dx = 0;
   let tracking = false;   // 指を置いている最中か
   let horizontal = false; // 横スワイプだと確定したか
-  let swiped = false;     // スワイプ後の誤タップを防ぐ目印
+  let swiped = false;     // スワイプ直後の誤タップを防ぐ目印
+  let busy = false;       // 切り替えの動きが終わるまで次を受けない
+  let lastX = 0;
+  let lastT = 0;
+  let speed = 0;          // 指を離した瞬間の速さ（px/ミリ秒）
 
   const width = () => stage.clientWidth || 1;
 
-  function reset(animate) {
-    pane.style.transition = animate ? '' : 'none';
-    pane.style.transform = '';
-    pane.style.opacity = '';
+  // 帯の位置。基準は中央（当月）で、そこから指の分だけずらす
+  function place(offset, animate) {
+    track.style.transition = animate ? 'transform 0.26s cubic-bezier(0.22, 0.9, 0.3, 1)' : 'none';
+    track.style.transform = `translateX(calc(-33.3333% + ${offset}px))`;
   }
 
   stage.addEventListener('pointerdown', (event) => {
+    if (busy) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     pointerId = event.pointerId;
-    startX = event.clientX;
+    startX = lastX = event.clientX;
     startY = event.clientY;
-    moved = 0;
+    lastT = event.timeStamp;
+    dx = 0;
+    speed = 0;
     tracking = true;
     horizontal = false;
     swiped = false;
-    reset(false);
   });
 
   stage.addEventListener('pointermove', (event) => {
     if (!tracking || event.pointerId !== pointerId) return;
-    const dx = event.clientX - startX;
-    const dy = event.clientY - startY;
+    const mx = event.clientX - startX;
+    const my = event.clientY - startY;
 
-    // 最初の数ピクセルで「横スワイプ」か「縦スクロール」かを見分ける
+    // 横か縦かは数ピクセルで見分ける。小さくすると反応が早くなる
     if (!horizontal) {
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
-      if (Math.abs(dy) >= Math.abs(dx)) { tracking = false; return; }
+      if (Math.abs(mx) < 5 && Math.abs(my) < 5) return;
+      if (Math.abs(my) > Math.abs(mx)) { tracking = false; return; }
       horizontal = true;
       swiped = true;
       stage.setPointerCapture?.(pointerId);
     }
 
-    moved = dx;
-    // 指の動きより少し控えめに動かすと、ゴムのような手応えになる
-    pane.style.transform = `translateX(${dx * 0.55}px)`;
-    pane.style.opacity = String(Math.max(0.4, 1 - Math.abs(dx) / width()));
+    // 指と同じだけ動かす（控えめにしないほうが素直な手応えになる）
+    dx = mx;
+    const dt = event.timeStamp - lastT;
+    if (dt > 0) speed = (event.clientX - lastX) / dt;
+    lastX = event.clientX;
+    lastT = event.timeStamp;
+    place(dx, false);
   });
 
   function finish(event) {
     if (event && pointerId !== null && event.pointerId !== pointerId) return;
     const wasHorizontal = horizontal;
-    const distance = moved;
     tracking = false;
     horizontal = false;
     pointerId = null;
     if (!wasHorizontal) return;
 
-    // 画面幅の4分の1、または60px以上動かしたら月を移動する
-    const threshold = Math.min(width() / 4, 60);
-    if (Math.abs(distance) >= threshold) onCommit(distance < 0 ? 1 : -1);
-    else reset(true);
+    const S = width();
+    const dir = dx < 0 ? 1 : -1;
+    // ゆっくり動かしたときは距離で、素早くはじいたときは速さで判断する。
+    // はじいた向きと指の向きが揃っているときだけ、速さでの切り替えを認める。
+    const far = Math.abs(dx) > S * 0.18;
+    const flicked = Math.abs(speed) > 0.3 && Math.abs(dx) > 12 && Math.sign(speed) === Math.sign(dx);
+
+    if (far || flicked) {
+      busy = true;
+      place(-dir * S, true);           // 指の動きの続きとして最後まで滑らせる
+      // 行数が違う月に移るとき、枠の高さも一緒に変える
+      const incoming = panes[dir > 0 ? 2 : 0];
+      if (incoming) {
+        stage.style.transition = 'height 0.26s cubic-bezier(0.22, 0.9, 0.3, 1)';
+        stage.style.height = `${incoming.offsetHeight}px`;
+      }
+      // 動きの完了と保険のタイマーの両方から呼ばれるので、1回だけ通す
+      let fired = false;
+      const done = () => {
+        if (fired) return;
+        fired = true;
+        track.removeEventListener('transitionend', done);
+        busy = false;
+        onCommit(dir);
+      };
+      track.addEventListener('transitionend', done);
+      setTimeout(done, 400);           // 動きが起きなかったときの保険
+    } else {
+      place(0, true);                  // 戻す
+    }
   }
 
   stage.addEventListener('pointerup', finish);
   stage.addEventListener('pointercancel', finish);
-  // スワイプ直後のタップで日付が選ばれてしまうのを防ぐ
   stage.addEventListener('click', (event) => {
     if (swiped) { event.stopPropagation(); event.preventDefault(); swiped = false; }
   }, true);
+
+  place(0, false);
 }
 
-async function renderCalendar({ dir = 0 } = {}) {
+// 1か月分のマス目を組み立てる
+function monthCells(y, m, byDate, shopMap, today, selected) {
+  const prefix = `${y}-${pad2(m + 1)}`;
+  const firstDow = new Date(y, m, 1).getDay();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+
+  let cells = '';
+  for (let i = 0; i < firstDow; i++) {
+    cells += '<div class="cal-cell is-blank" aria-hidden="true"></div>';
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = `${prefix}-${pad2(d)}`;
+    const list = byDate.get(date) ?? [];
+    const classes = ['cal-cell', `dow-${(firstDow + d - 1) % 7}`];
+    if (list.length) classes.push('has-record');
+    if (date === today) classes.push('is-today');
+    if (date === selected) classes.push('is-selected');
+    cells += `
+      <button type="button" class="${classes.join(' ')}" data-date="${date}"
+        aria-label="${m + 1}月${d}日 ${list.length}杯" aria-pressed="${date === selected}">
+        <span class="cal-day">${d}</span>
+        ${list.slice(0, 2).map((r) => `<span class="cal-item">${esc(shopName(shopMap, r.shopId))}</span>`).join('')}
+        ${list.length > 2 ? `<span class="cal-more">+${list.length - 2}</span>` : ''}
+      </button>`;
+  }
+  return `<div class="cal-grid">${cells}</div>`;
+}
+
+async function renderCalendar() {
   const today = todayStr();
   if (!cal) {
     const t = new Date();
@@ -493,32 +709,15 @@ async function renderCalendar({ dir = 0 } = {}) {
 
   const { y, m } = cal;
   const prefix = `${y}-${pad2(m + 1)}`;
-  const firstDow = new Date(y, m, 1).getDay();
-  const daysInMonth = new Date(y, m + 1, 0).getDate();
   const monthCount = records.filter((r) => r.date.startsWith(prefix)).length;
   const isThisMonth = prefix === today.slice(0, 7);
-
-  let cells = '';
-  for (let i = 0; i < firstDow; i++) {
-    cells += '<div class="cal-cell is-blank" aria-hidden="true"></div>';
-  }
-  for (let d = 1; d <= daysInMonth; d++) {
-    const date = `${prefix}-${pad2(d)}`;
-    const list = byDate.get(date) ?? [];
-    const classes = ['cal-cell', `dow-${(firstDow + d - 1) % 7}`];
-    if (list.length) classes.push('has-record');
-    if (date === today) classes.push('is-today');
-    if (date === cal.selected) classes.push('is-selected');
-    cells += `
-      <button type="button" class="${classes.join(' ')}" data-date="${date}"
-        aria-label="${m + 1}月${d}日 ${list.length}杯" aria-pressed="${date === cal.selected}">
-        <span class="cal-day">${d}</span>
-        ${list.slice(0, 2).map((r) => `<span class="cal-item">${esc(shopName(shopMap, r.shopId))}</span>`).join('')}
-        ${list.length > 2 ? `<span class="cal-more">+${list.length - 2}</span>` : ''}
-      </button>`;
-  }
-
   const dayList = byDate.get(cal.selected) ?? [];
+
+  // 前月・当月・翌月を並べて置く
+  const panes = [-1, 0, 1].map((offset) => {
+    const d = new Date(y, m + offset, 1);
+    return `<div class="cal-pane">${monthCells(d.getFullYear(), d.getMonth(), byDate, shopMap, today, cal.selected)}</div>`;
+  }).join('');
 
   app.innerHTML = header('カレンダー') + `
     <div class="cal-nav">
@@ -527,13 +726,11 @@ async function renderCalendar({ dir = 0 } = {}) {
       <button type="button" class="cal-arrow" data-move="1" aria-label="次の月">›</button>
     </div>
     ${isThisMonth ? '' : '<button type="button" class="cal-back-today" data-move="today">今月に戻る</button>'}
+    <div class="cal-week" aria-hidden="true">
+      ${[...'日月火水木金土'].map((w, i) => `<span class="dow-${i}">${w}</span>`).join('')}
+    </div>
     <div class="cal-stage" id="cal-stage">
-      <div class="cal-week" aria-hidden="true">
-        ${[...'日月火水木金土'].map((w, i) => `<span class="dow-${i}">${w}</span>`).join('')}
-      </div>
-      <div class="cal-pane${dir ? (dir > 0 ? ' slide-from-right' : ' slide-from-left') : ''}">
-        <div class="cal-grid">${cells}</div>
-      </div>
+      <div class="cal-track" id="cal-track">${panes}</div>
     </div>
 
     <section class="day-panel">
@@ -544,6 +741,8 @@ async function renderCalendar({ dir = 0 } = {}) {
       <a class="btn btn-ghost btn-block" href="#/new?date=${cal.selected}">この日の記録を追加</a>
     </section>`;
 
+  const track = $('#cal-track');
+
   // 月を移動する（delta = -1で前の月、+1で次の月、'today'で今月）
   function moveMonth(delta) {
     const target = delta === 'today' ? new Date() : new Date(cal.y, cal.m + Number(delta), 1);
@@ -551,11 +750,26 @@ async function renderCalendar({ dir = 0 } = {}) {
     cal.m = target.getMonth();
     const targetPrefix = `${cal.y}-${pad2(cal.m + 1)}`;
     cal.selected = targetPrefix === today.slice(0, 7) ? today : `${targetPrefix}-01`;
-    renderCalendar({ dir: delta === 'today' ? 0 : Number(delta) });
+    renderCalendar();
+  }
+
+  // 矢印ボタンも、スワイプと同じ滑り方で切り替える
+  function slideTo(delta) {
+    if (delta === 'today') { moveMonth(delta); return; }
+    const dir = Number(delta);
+    const stageEl = $('#cal-stage');
+    track.style.transition = 'transform 0.26s cubic-bezier(0.22, 0.9, 0.3, 1)';
+    track.style.transform = `translateX(calc(-33.3333% + ${-dir * (stageEl.clientWidth || 0)}px))`;
+    const incoming = track.children[dir > 0 ? 2 : 0];
+    if (incoming) {
+      stageEl.style.transition = 'height 0.26s cubic-bezier(0.22, 0.9, 0.3, 1)';
+      stageEl.style.height = `${incoming.offsetHeight}px`;
+    }
+    setTimeout(() => moveMonth(dir), 240);
   }
 
   app.querySelectorAll('[data-move]').forEach((btn) => {
-    btn.onclick = () => moveMonth(btn.dataset.move);
+    btn.onclick = () => slideTo(btn.dataset.move);
   });
 
   app.querySelectorAll('.cal-cell[data-date]').forEach((cell) => {
@@ -565,8 +779,12 @@ async function renderCalendar({ dir = 0 } = {}) {
     };
   });
 
+  // 枠の高さは表示中の月に合わせる（月ごとに行数が違うため）
   const stage = $('#cal-stage');
-  setupSwipe(stage, stage.querySelector('.cal-pane'), moveMonth);
+  stage.style.transition = 'none';
+  stage.style.height = `${track.children[1].offsetHeight}px`;
+
+  setupSwipe(stage, track, moveMonth);
 }
 
 /* ===================== 記録する・編集する ===================== */
@@ -656,6 +874,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
             写真を選ぶ
             <input id="f-photo" type="file" accept="image/*" class="visually-hidden">
           </label>
+          <button type="button" class="btn btn-ghost" id="f-photo-crop" hidden>範囲を変える</button>
           <button type="button" class="btn btn-ghost" id="f-photo-remove" hidden>写真を外す</button>
         </div>
       </div>
@@ -679,6 +898,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
   const noImageEl = $('#f-noimage');
   const photoInput = $('#f-photo');
   const removeBtn = $('#f-photo-remove');
+  const cropBtn = $('#f-photo-crop');
   const errorEl = $('#f-error');
 
   // --- お店の選択 ---
@@ -731,23 +951,25 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
   // photoChange: undefined = 変更なし / null = 外す / Blob = 新しい写真
   let photoChange;
   let previewUrl = null;
+  let sourceFile = null; // 切り抜き直せるよう、選んだ元の写真を覚えておく
 
   function showPhoto(url) {
     preview.hidden = !url;
     noImageEl.hidden = Boolean(url);
     removeBtn.hidden = !url;
+    cropBtn.hidden = !sourceFile;
     if (url) preview.src = url;
     else preview.removeAttribute('src');
   }
   showPhoto(currentPhotoUrl);
 
-  photoInput.onchange = async () => {
-    const file = photoInput.files?.[0];
-    photoInput.value = ''; // 同じ写真をもう一度選べるようにリセット
-    if (!file) return;
+  // 切り抜き画面を開き、決定されたらプレビューに反映する
+  async function runCrop(file) {
     errorEl.textContent = '';
     try {
-      const blob = await resizeImage(file);
+      const blob = await cropImage(file);
+      if (!blob) return; // やめるを押した
+      sourceFile = file;
       photoChange = blob;
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       previewUrl = URL.createObjectURL(blob);
@@ -756,10 +978,21 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       console.error(err);
       errorEl.textContent = '写真を読み込めませんでした。別の写真を選んでください。';
     }
+  }
+
+  photoInput.onchange = () => {
+    const file = photoInput.files?.[0];
+    photoInput.value = ''; // 同じ写真をもう一度選べるようにリセット
+    if (file) runCrop(file);
+  };
+
+  cropBtn.onclick = () => {
+    if (sourceFile) runCrop(sourceFile);
   };
 
   removeBtn.onclick = () => {
     photoChange = null;
+    sourceFile = null;
     showPhoto(null);
   };
 

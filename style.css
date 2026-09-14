@@ -497,7 +497,7 @@ a { color: var(--yolk); }
 .shop-photo {
   display: grid;
   place-items: center;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 1;
   overflow: hidden;
   border-radius: 10px;
   background: var(--surface-2);
@@ -507,7 +507,7 @@ a { color: var(--yolk); }
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .shop-comment { margin: 12px 0 0; }
@@ -738,32 +738,147 @@ textarea { resize: vertical; }
 .photo-pick {
   display: grid;
   place-items: center;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 1;
   margin-bottom: 8px;
   overflow: hidden;
   border-radius: 10px;
   background: var(--surface-2);
 }
 
+/* 写真は切り抜きで正方形になる。
+   以前に保存した写真も全体が見えるよう contain にしている */
 .photo-pick img {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .photo-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
 
-.photo-actions .btn { flex: 1; }
+/* 3つ並ぶので、文字が折り返さないよう余白を詰める */
+.photo-actions .btn {
+  padding: 0 6px;
+  font-size: 15px;
+  white-space: nowrap;
+}
 
 .form-error {
   min-height: 1.6em;
   margin: 8px 0 0;
   font-weight: 600;
   color: #E8836F;
+}
+
+/* ---------- 切り抜き画面（トリミング） ---------- */
+.no-scroll { overflow: hidden; }
+
+.cropper {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.crop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.crop-title {
+  font-family: var(--mincho);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.crop-btn {
+  min-height: 44px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--cream);
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.crop-btn.is-ok {
+  background: var(--shu);
+  color: #FFF3EC;
+  font-weight: 700;
+}
+
+.crop-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  padding: 16px;
+  min-height: 0;
+}
+
+/* 写真を動かす枠。touch-action: none で画面スクロールを止め、
+   指の動きをすべて切り抜きの操作に使う */
+.crop-stage {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 2px solid var(--yolk);
+  border-radius: 10px;
+  background: var(--surface-2);
+  touch-action: none;
+  cursor: grab;
+}
+
+.crop-img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  max-width: none;
+  -webkit-user-select: none;
+  user-select: none;
+  pointer-events: none;
+}
+
+.crop-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.crop-zoom {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--yolk);
+}
+
+.crop-hint {
+  max-width: 420px;
+  margin: 0 auto;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+  text-align: center;
 }
 
 /* ---------- ギルティ演出（保存時） ---------- */
@@ -863,23 +978,19 @@ textarea { resize: vertical; }
   touch-action: pan-y;
 }
 
-.cal-pane {
-  transition: transform 0.22s ease-out, opacity 0.22s ease-out;
+/* 前月・当月・翌月を横一列に並べた帯。
+   帯ごと動かすので、少しスワイプしただけで隣の月が見える。 */
+.cal-track {
+  display: flex;
+  width: 300%;
   will-change: transform;
+  transform: translateX(-33.3333%);
 }
 
-/* 月を切り替えたときに、横から滑り込む動き */
-.cal-pane.slide-from-right { animation: slide-from-right 0.22s ease-out; }
-.cal-pane.slide-from-left { animation: slide-from-left 0.22s ease-out; }
-
-@keyframes slide-from-right {
-  from { transform: translateX(36%); opacity: 0.3; }
-  to { transform: translateX(0); opacity: 1; }
-}
-
-@keyframes slide-from-left {
-  from { transform: translateX(-36%); opacity: 0.3; }
-  to { transform: translateX(0); opacity: 1; }
+.cal-pane {
+  flex: 0 0 33.3333%;
+  min-width: 0;
+  align-self: flex-start;
 }
 
 .cal-week,
