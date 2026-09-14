@@ -767,6 +767,27 @@ textarea { resize: vertical; }
   white-space: nowrap;
 }
 
+/* 「記録と同時に共有する」のチェック欄 */
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 20px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.check-row input[type="checkbox"] {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  accent-color: var(--shu);
+}
+
 .form-error {
   min-height: 1.6em;
   margin: 8px 0 0;
@@ -1081,6 +1102,54 @@ textarea { resize: vertical; }
 }
 
 .share-box { margin-top: 8px; }
+
+/* ---------- お店の住所と地図リンク ---------- */
+.shop-address {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 10px 0 0;
+  font-size: 14px;
+  color: #C9C1B2;
+}
+
+.shop-address.is-empty { color: var(--muted); }
+
+.map-link {
+  flex-shrink: 0;
+  color: var(--yolk);
+  text-decoration: underline;
+}
+
+.post-foot .map-link { margin-left: 0; }
+
+/* ---------- パスワード欄の目のマーク ---------- */
+.pw-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.pw-row input {
+  padding-right: 52px;
+}
+
+.pw-eye {
+  position: absolute;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.pw-eye[aria-pressed="true"] { color: var(--yolk); }
 
 /* ---------- アカウント ---------- */
 .account { padding-bottom: 24px; }

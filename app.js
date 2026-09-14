@@ -438,6 +438,9 @@ function streakDays(records, endDate) {
 // 記録した直後だけ、その一杯についてギルチキに話させるための目印
 let lastSavedId = null;
 
+// 「記録と同時に共有する」の状態を覚えておき、次に記録するときの初期値にする
+let shareByDefault = false;
+
 // ギルチキが話す一言を選ぶ。
 // 当てはまるセリフをすべて集めてから、その中からランダムに1つ選ぶ。
 // 優先順位をつけていないので、同じ一杯でも開くたびに違う一言になる。
@@ -549,8 +552,6 @@ async function renderHome() {
       ${recent.length
         ? `<ul class="rec-list">${recent.map((r) => recordRow(r, shopName(shopMap, r.shopId), r.menu)).join('')}</ul>`
         : '<p class="empty">記録するとここに表示されます。</p>'}
-
-      <a class="text-link" href="#/settings">バックアップ・設定</a>
     </section>`;
 
   const avatar = $('#avatar-btn');
@@ -600,6 +601,13 @@ function zukanCard({ shop, no, count, comment, url }) {
 
 /* ===================== お店の詳細 ===================== */
 
+// 住所から地図を開くためのURL。店名も一緒に渡すと、
+// ただの住所ではなくお店そのものに印が立ちやすい。
+function mapUrl(name, address) {
+  const q = encodeURIComponent(`${name} ${address}`.trim());
+  return `https://www.google.com/maps/search/?api=1&query=${q}`;
+}
+
 async function renderShop({ id }) {
   const { records, shopMap } = await loadAll();
   const shop = shopMap.get(id);
@@ -630,6 +638,12 @@ async function renderShop({ id }) {
         <div><dt>最高</dt><dd>${best ?? '–'}<small>点</small></dd></div>
       </dl>
 
+      ${shop.address
+        ? `<p class="shop-address">${esc(shop.address)}
+             <a class="map-link" href="${mapUrl(shop.name, shop.address)}" target="_blank" rel="noopener">地図で開く</a>
+           </p>`
+        : '<p class="shop-address is-empty">住所は未登録です</p>'}
+
       <a class="btn btn-primary btn-block" href="#/new?shop=${id}">このお店で記録する</a>
 
       <h2 class="section-title">食べた記録</h2>
@@ -637,9 +651,18 @@ async function renderShop({ id }) {
 
       <div class="shop-actions">
         <button type="button" class="btn btn-ghost" id="rename-shop">店名を変更</button>
-        <button type="button" class="btn btn-danger" id="delete-shop">お店を削除</button>
+        <button type="button" class="btn btn-ghost" id="address-shop">住所を${shop.address ? '変更' : '登録'}</button>
       </div>
+      <button type="button" class="btn btn-danger btn-block" id="delete-shop">お店を削除</button>
     </section>`;
+
+  $('#address-shop').onclick = async () => {
+    const address = prompt('お店の住所を入力してください（空にすると削除します）', shop.address ?? '')?.trim();
+    if (address === undefined) return; // キャンセル
+    await db.put('shops', { ...shop, address });
+    toast(address ? '住所を保存しました' : '住所を削除しました');
+    renderShop({ id });
+  };
 
   $('#rename-shop').onclick = async () => {
     const name = prompt('新しい店名を入力してください', shop.name)?.trim();
@@ -946,6 +969,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
           <option value="__new" ${selectedShop === '__new' ? 'selected' : ''}>＋ 初めてのお店</option>
         </select>
         <input id="f-newshop" type="text" placeholder="店名を入力" maxlength="50" autocomplete="off" hidden>
+        <input id="f-newaddress" type="text" placeholder="住所（任意。入れると地図で開けます）" maxlength="120" autocomplete="off" hidden>
         <p class="hint" id="f-count"></p>
       </div>
 
@@ -996,6 +1020,12 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
         <textarea id="f-comment" rows="3" maxlength="200" placeholder="その時感じたこと">${esc(record?.comment)}</textarea>
       </div>
 
+      ${!isEdit && me.user ? `
+      <label class="check-row">
+        <input type="checkbox" id="f-share" ${shareByDefault ? 'checked' : ''}>
+        <span>記録と同時にみんなへ共有する</span>
+      </label>` : ''}
+
       <p class="form-error" id="f-error" role="alert"></p>
       <button type="submit" class="btn btn-primary btn-block" id="f-submit">${isEdit ? '変更を保存' : '記録する'}</button>
       ${isEdit ? '<button type="button" class="btn btn-danger btn-block" id="f-delete">この記録を削除</button>' : ''}
@@ -1005,6 +1035,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
 
   const shopSelect = $('#f-shop');
   const newShopInput = $('#f-newshop');
+  const newAddressInput = $('#f-newaddress');
   const countHint = $('#f-count');
   const scoreRange = $('#f-score');
   const scoreOut = $('#f-score-out');
@@ -1019,6 +1050,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
   function updateShopUI() {
     const value = shopSelect.value;
     newShopInput.hidden = value !== '__new';
+    newAddressInput.hidden = value !== '__new';
     if (value === '__new') {
       countHint.textContent = '初めてのお店です。1回目の記録になります。';
     } else if (value) {
@@ -1140,7 +1172,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       let shop = null;
       let shopId = shopValue;
       if (shopValue === '__new') {
-        shop = { id: newId(), name: newName, createdAt: Date.now() };
+        shop = { id: newId(), name: newName, address: newAddressInput.value.trim(), createdAt: Date.now() };
         shopId = shop.id;
       }
 
@@ -1176,6 +1208,31 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
 
       const name = shop?.name ?? shops.find((s) => s.id === shopId)?.name;
       const nth = (counts.get(shopId) ?? 0) + 1;
+
+      // 記録と同時に共有する場合。保存自体はもう済んでいるので、
+      // ここで失敗しても記録が消えることはない。
+      const shareNow = $('#f-share')?.checked ?? false;
+      if (!isEdit && me.user) shareByDefault = shareNow;
+      if (shareNow) {
+        try {
+          const postId = await cloud.sharePost({
+            uid: me.user.uid,
+            nickname: myName(),
+            avatar: me.profile?.avatar ?? null,
+            shopName: name,
+            shopAddress: (shop ?? shops.find((s) => s.id === shopId))?.address ?? '',
+            menu: saved.menu,
+            date: saved.date,
+            score: saved.score,
+            comment: saved.comment ?? '',
+            photo: await photoForShare(saved.photoId),
+          });
+          await db.put('records', { ...saved, postId });
+        } catch (err) {
+          console.error(err);
+          toast('記録はできましたが、共有に失敗しました');
+        }
+      }
 
       if (saved.score >= GUILTY) {
         await guiltyFlash(isEdit ? `${name}・${saved.score}点` : `${name}（${nth}回目）・${saved.score}点`);
@@ -1213,7 +1270,8 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       goBack();
     };
 
-    setupShare(record, shops.find((s) => s.id === record.shopId)?.name ?? '（不明なお店）');
+    const shopOfRecord = shops.find((s) => s.id === record.shopId);
+    setupShare(record, shopOfRecord?.name ?? '（不明なお店）', shopOfRecord?.address ?? '');
   }
 }
 
@@ -1281,6 +1339,9 @@ function postCard(post) {
       <div class="post-foot">
         ${guiltyButton(post)}
         <a class="post-link" href="#/post/${post.id}">コメント</a>
+        ${post.shopAddress
+          ? `<a class="post-link map-link" href="${mapUrl(post.shopName, post.shopAddress)}" target="_blank" rel="noopener">地図</a>`
+          : ''}
       </div>
     </li>`;
 }
@@ -1629,7 +1690,7 @@ async function photoForShare(photoId) {
 }
 
 // 共有ボタンの動きをつなぐ。record は編集中の記録。
-function setupShare(record, shopNameText) {
+function setupShare(record, shopNameText, shopAddressText) {
   const btn = $('#share-btn');
   if (!btn) return;
 
@@ -1652,6 +1713,7 @@ function setupShare(record, shopNameText) {
           nickname: myName(),
           avatar: me.profile?.avatar ?? null,
           shopName: shopNameText,
+          shopAddress: shopAddressText ?? '',
           menu: record.menu,
           date: record.date,
           score: record.score,
@@ -1714,6 +1776,13 @@ async function renderAccount() {
   });
 }
 
+// 目のマーク。open=true のときは「今は見えている」ので斜線入りにする
+function eyeIcon(open) {
+  const base = '<path d="M1 10c2.6-4 5.6-6 9-6s6.4 2 9 6c-2.6 4-5.6 6-9 6s-6.4-2-9-6z" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="10" cy="10" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7"/>';
+  const slash = open ? '<path d="M3 3l14 14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>' : '';
+  return `<svg viewBox="0 0 20 20" width="22" height="22" aria-hidden="true">${base}${slash}</svg>`;
+}
+
 function renderLoginForm(slot) {
   slot.innerHTML = `
     <p>身内だけで記録を見せ合うための、簡単なログインです。まだ登録していなければ、下のフォームでそのまま作成できます。</p>
@@ -1725,12 +1794,29 @@ function renderLoginForm(slot) {
       </div>
       <div class="field">
         <label for="auth-password">パスワード<small>（6文字以上）</small></label>
-        <input id="auth-password" type="password" autocomplete="current-password" required minlength="6">
+        <div class="pw-row">
+          <input id="auth-password" type="password" autocomplete="current-password" required minlength="6">
+          <button type="button" class="pw-eye" id="auth-eye" aria-label="パスワードを表示" aria-pressed="false">
+            ${eyeIcon(false)}
+          </button>
+        </div>
       </div>
       <p class="form-error" id="auth-error" role="alert"></p>
       <button type="submit" class="btn btn-primary btn-block" id="auth-submit">ログイン</button>
       <button type="button" class="btn btn-ghost btn-block" id="auth-toggle">初めての方はこちら（新規登録）</button>
     </form>`;
+
+  // 目のマークでパスワードの表示・非表示を切り替える
+  const pwInput = $('#auth-password');
+  const eyeBtn = $('#auth-eye');
+  eyeBtn.onclick = () => {
+    const show = pwInput.type === 'password';
+    pwInput.type = show ? 'text' : 'password';
+    eyeBtn.innerHTML = eyeIcon(show);
+    eyeBtn.setAttribute('aria-pressed', String(show));
+    eyeBtn.setAttribute('aria-label', show ? 'パスワードを隠す' : 'パスワードを表示');
+    pwInput.focus();
+  };
 
   const form = $('#auth-form');
   const submitBtn = $('#auth-submit');
