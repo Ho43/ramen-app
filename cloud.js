@@ -4,6 +4,11 @@
 // この端末の中だけで完結する db.js とは別に、こちらはネットの先に
 // あるFirebaseとやり取りする。ネットにつながっていない・許可された
 // アカウントでない場合は、ここで投げられたエラーを呼び出し側が捕まえる。
+//
+// Firestoreの中身の作り：
+//   users/{uid}                    … プロフィール
+//   posts/{postId}                 … 共有された記録（guiltyUids に押した人のuid）
+//   posts/{postId}/comments/{id}   … その記録へのコメント
 // =====================================================
 
 import { firebaseConfig } from './firebase-config.js';
@@ -20,6 +25,7 @@ import {
   doc,
   setDoc,
   getDoc,
+  updateDoc,
   collection,
   addDoc,
   deleteDoc,
@@ -28,6 +34,8 @@ import {
   limit,
   onSnapshot,
   serverTimestamp,
+  arrayUnion,
+  arrayRemove,
 } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js';
 
 const app = initializeApp(firebaseConfig);
@@ -37,6 +45,10 @@ const db = getFirestore(app);
 // ログイン状態が変わるたびに呼ばれる。戻り値を呼ぶと監視をやめられる。
 export function watchAuth(callback) {
   return onAuthStateChanged(auth, callback);
+}
+
+export function currentUser() {
+  return auth.currentUser;
 }
 
 export async function signUp(email, password) {
@@ -53,7 +65,7 @@ export function signOutUser() {
   return firebaseSignOut(auth);
 }
 
-// --- プロフィール（users/そのuid） ---
+/* ---------- プロフィール ---------- */
 
 export async function saveProfile(uid, profile) {
   await setDoc(doc(db, 'users', uid), profile, { merge: true });
@@ -64,15 +76,26 @@ export async function getProfile(uid) {
   return snap.exists() ? snap.data() : null;
 }
 
-// --- 共有した記録（posts） ---
+/* ---------- 共有された記録 ---------- */
 
+// 投稿するときに、書いた人の名前とアイコンも一緒に入れておく。
+// あとから名前を引きに行かずに一覧を描けるようにするため。
 export async function sharePost(post) {
-  const ref = await addDoc(collection(db, 'posts'), { ...post, createdAt: serverTimestamp() });
+  const ref = await addDoc(collection(db, 'posts'), {
+    ...post,
+    guiltyUids: [],
+    createdAt: serverTimestamp(),
+  });
   return ref.id;
 }
 
 export async function deletePost(id) {
   await deleteDoc(doc(db, 'posts', id));
+}
+
+export async function getPost(id) {
+  const snap = await getDoc(doc(db, 'posts', id));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 }
 
 // みんなの記録を新しい順に流し込む。戻り値を呼ぶと購読をやめられる。
@@ -83,4 +106,43 @@ export function watchFeed(callback, onError) {
     (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
     onError,
   );
+}
+
+export function watchPost(id, callback, onError) {
+  return onSnapshot(
+    doc(db, 'posts', id),
+    (snap) => callback(snap.exists() ? { id: snap.id, ...snap.data() } : null),
+    onError,
+  );
+}
+
+/* ---------- ギルティ（いいね） ---------- */
+
+// 押した人のuidを配列に足す・外すだけ。数はその配列の長さで分かる。
+export function toggleGuilty(postId, uid, on) {
+  return updateDoc(doc(db, 'posts', postId), {
+    guiltyUids: on ? arrayUnion(uid) : arrayRemove(uid),
+  });
+}
+
+/* ---------- コメント ---------- */
+
+export function watchComments(postId, callback, onError) {
+  const q = query(collection(db, 'posts', postId, 'comments'), orderBy('createdAt', 'asc'), limit(200));
+  return onSnapshot(
+    q,
+    (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    onError,
+  );
+}
+
+export async function addComment(postId, comment) {
+  await addDoc(collection(db, 'posts', postId, 'comments'), {
+    ...comment,
+    createdAt: serverTimestamp(),
+  });
+}
+
+export function deleteComment(postId, commentId) {
+  return deleteDoc(doc(db, 'posts', postId, 'comments', commentId));
 }

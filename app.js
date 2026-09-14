@@ -82,6 +82,90 @@ function askPersist() {
   navigator.storage?.persist?.().catch(() => {});
 }
 
+/* ===================== ログイン状態 ===================== */
+
+// 今ログインしている人とそのプロフィール。画面のあちこちで使うので、
+// ここで1か所に覚えておいて、変化があったら画面を描き直す。
+let me = { user: null, profile: null, ready: false };
+
+cloud.watchAuth(async (user) => {
+  me.user = user;
+  me.profile = null;
+  if (user) {
+    try {
+      me.profile = await cloud.getProfile(user.uid);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+  me.ready = true;
+  // ログイン状態で見た目が変わる画面だけ描き直す
+  const path = (location.hash.slice(1) || '/').split('?')[0];
+  if (path === '/' || path === '/feed' || path.startsWith('/post/')) router();
+});
+
+const myName = () => me.profile?.nickname ?? me.user?.email?.split('@')[0] ?? '名無し';
+
+// ホーム右上に出すアイコン（プロフィール画像がなければ頭文字）
+function avatarButton() {
+  if (!me.user) {
+    return '<a class="avatar-btn is-guest" href="#/account" aria-label="ログイン">ロ</a>';
+  }
+  const url = me.profile?.avatar;
+  const inner = url
+    ? `<img src="${url}" alt="">`
+    : esc(myName().slice(0, 1));
+  return `<button type="button" class="avatar-btn" id="avatar-btn" aria-label="アカウントメニュー">${inner}</button>`;
+}
+
+// アイコンを押したときに出る小さなメニュー
+function openAvatarMenu(anchor) {
+  // すでに開いていたら、もう一度押すと閉じる
+  if (document.getElementById('avatar-menu')) {
+    document.getElementById('avatar-menu').remove();
+    return;
+  }
+
+  const menu = document.createElement('div');
+  menu.id = 'avatar-menu';
+  menu.className = 'avatar-menu';
+  menu.innerHTML = `
+    <div class="am-head">
+      <span class="am-name">${esc(myName())}</span>
+      <span class="am-mail">${esc(me.user.email)}</span>
+    </div>
+    <a class="am-item" href="#/account">プロフィールを編集</a>
+    <a class="am-item" href="#/settings">バックアップ・設定</a>
+    <button type="button" class="am-item is-quiet" data-am="logout">ログアウト</button>`;
+  document.body.appendChild(menu);
+
+  const box = anchor.getBoundingClientRect();
+  menu.style.top = `${box.bottom + 8}px`;
+  menu.style.right = `${Math.max(8, window.innerWidth - box.right)}px`;
+
+  function close() {
+    menu.remove();
+    document.removeEventListener('pointerdown', onOutside, true);
+  }
+  function onOutside(event) {
+    if (!menu.contains(event.target) && event.target !== anchor) close();
+  }
+  // 開いた直後の同じクリックで閉じないよう、次の間合いから見張る
+  setTimeout(() => document.addEventListener('pointerdown', onOutside, true), 0);
+
+  menu.addEventListener('click', async (event) => {
+    if (event.target.dataset.am === 'logout') {
+      close();
+      if (!confirm('ログアウトしますか？')) return;
+      await cloud.signOutUser();
+      toast('ログアウトしました');
+      return;
+    }
+    if (event.target.closest('.am-item')) close();
+  });
+}
+
+
 /* ===================== 写真 ===================== */
 
 // 表示用URLを使い回すための置き場所
@@ -425,12 +509,17 @@ async function renderHome() {
 
   app.innerHTML = `
     <section class="home">
-      <h1 class="app-title">ラーメン記録</h1>
-      <p class="summary">
-        ${records.length
-          ? `今月 ${monthCount}杯　通算 ${records.length}杯　${shops.length}店`
-          : 'まだ記録がありません。最初の一杯を記録しましょう。'}
-      </p>
+      <div class="home-top">
+        <div>
+          <h1 class="app-title">ラーメン記録</h1>
+          <p class="summary">
+            ${records.length
+              ? `今月 ${monthCount}杯　通算 ${records.length}杯　${shops.length}店`
+              : 'まだ記録がありません。最初の一杯を記録しましょう。'}
+          </p>
+        </div>
+        ${avatarButton()}
+      </div>
 
       <div class="greet">
         ${mascot(subject?.score ?? 50)}
@@ -450,6 +539,10 @@ async function renderHome() {
           <span class="ticket-label">カレンダー</span>
           <span class="ticket-sub">今月 ${monthCount}杯</span>
         </a>
+        <a class="ticket ticket-wide" href="#/feed">
+          <span class="ticket-label">みんなの記録</span>
+          <span class="ticket-sub">${me.user ? '共有された一杯を見る' : 'ログインすると使えます'}</span>
+        </a>
       </nav>
 
       <h2 class="section-title">最近の記録</h2>
@@ -459,6 +552,9 @@ async function renderHome() {
 
       <a class="text-link" href="#/settings">バックアップ・設定</a>
     </section>`;
+
+  const avatar = $('#avatar-btn');
+  if (avatar) avatar.onclick = () => openAvatarMenu(avatar);
 }
 
 /* ===================== 図鑑 ===================== */
@@ -903,7 +999,9 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       <p class="form-error" id="f-error" role="alert"></p>
       <button type="submit" class="btn btn-primary btn-block" id="f-submit">${isEdit ? '変更を保存' : '記録する'}</button>
       ${isEdit ? '<button type="button" class="btn btn-danger btn-block" id="f-delete">この記録を削除</button>' : ''}
-    </form>`;
+    </form>
+
+    ${isEdit ? shareSection(record) : ''}`;
 
   const shopSelect = $('#f-shop');
   const newShopInput = $('#f-newshop');
@@ -1101,12 +1199,262 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
   if (isEdit) {
     $('#f-delete').onclick = async () => {
       if (!confirm('この記録を削除しますか？元には戻せません。')) return;
+      // 共有していた場合は、みんなの記録からも消す
+      if (record.postId) {
+        try {
+          await cloud.deletePost(record.postId);
+        } catch (err) {
+          console.error(err);
+        }
+      }
       await db.deleteRecord(record);
       if (record.photoId) forgetPhotoUrl(record.photoId);
       toast('記録を削除しました');
       goBack();
     };
+
+    setupShare(record, shops.find((s) => s.id === record.shopId)?.name ?? '（不明なお店）');
   }
+}
+
+/* ===================== みんなの記録 ===================== */
+
+// 画面を離れるときに購読をやめるための置き場所
+let feedStop = null;
+
+function stopFeed() {
+  if (feedStop) {
+    feedStop();
+    feedStop = null;
+  }
+}
+
+// FirestoreのcreatedAtは「サーバー側の時刻」なので、
+// 送った直後はまだ空のことがある。その場合は「送信中」と出す。
+function whenText(stamp) {
+  if (!stamp?.toDate) return '送信中…';
+  const d = stamp.toDate();
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return 'たった今';
+  if (diff < 3600) return `${Math.floor(diff / 60)}分前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}時間前`;
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function avatarChip(nickname, avatar) {
+  const name = nickname || '名無し';
+  return avatar
+    ? `<img class="chip-avatar" src="${avatar}" alt="">`
+    : `<span class="chip-avatar is-letter">${esc(name.slice(0, 1))}</span>`;
+}
+
+function guiltyButton(post) {
+  const uids = post.guiltyUids ?? [];
+  const on = me.user ? uids.includes(me.user.uid) : false;
+  return `<button type="button" class="guilty-btn${on ? ' is-on' : ''}" data-guilty="${post.id}">
+    <span class="gb-word">ギルティ</span>
+    <span class="gb-count">${uids.length}</span>
+  </button>`;
+}
+
+function postCard(post) {
+  const photo = post.photo
+    ? `<div class="post-photo"><img src="${post.photo}" alt="" loading="lazy"></div>`
+    : '';
+  const comment = (post.comment ?? '').trim();
+  return `
+    <li class="post">
+      <div class="post-head">
+        ${avatarChip(post.nickname, post.avatar)}
+        <span class="post-who">${esc(post.nickname || '名無し')}</span>
+        <span class="post-when">${esc(whenText(post.createdAt))}</span>
+      </div>
+      <a class="post-body" href="#/post/${post.id}">
+        ${photo}
+        <div class="post-lines">
+          <span class="post-shop">${esc(post.shopName)}</span>
+          <span class="post-menu">${esc(post.menu)}</span>
+          ${comment ? `<span class="post-comment">${esc(comment)}</span>` : ''}
+        </div>
+        <span class="post-score${post.score >= GUILTY ? ' is-guilty' : ''}">${post.score}<small>点</small></span>
+      </a>
+      <div class="post-foot">
+        ${guiltyButton(post)}
+        <a class="post-link" href="#/post/${post.id}">コメント</a>
+      </div>
+    </li>`;
+}
+
+async function renderFeed() {
+  stopFeed();
+
+  if (!me.ready) {
+    app.innerHTML = header('みんなの記録') + '<p class="empty">確認しています…</p>';
+    return;
+  }
+  if (!me.user) {
+    app.innerHTML = header('みんなの記録') + `
+      <p class="empty">ログインすると、身内が共有した記録を見られます。</p>
+      <a class="btn btn-primary btn-block" href="#/account">ログイン</a>`;
+    return;
+  }
+
+  app.innerHTML = header('みんなの記録') + '<ul class="post-list" id="feed"><li class="empty">読み込んでいます…</li></ul>';
+  const list = $('#feed');
+
+  feedStop = cloud.watchFeed(
+    (posts) => {
+      if (!document.body.contains(list)) return; // もう別の画面に移っている
+      list.innerHTML = posts.length
+        ? posts.map(postCard).join('')
+        : '<li class="empty">まだ誰も共有していません。記録の編集画面から共有できます。</li>';
+    },
+    (err) => {
+      console.error(err);
+      list.innerHTML = `<li class="empty">${esc(shareErrorMessage(err))}</li>`;
+    },
+  );
+
+  // ギルティボタンは押すたびに書き込むので、一覧全体ではなく押された1つだけ相手にする
+  list.onclick = async (event) => {
+    const btn = event.target.closest('[data-guilty]');
+    if (!btn) return;
+    event.preventDefault();
+    const on = !btn.classList.contains('is-on');
+    btn.classList.toggle('is-on', on); // 通信を待たずに見た目を変える
+    try {
+      await cloud.toggleGuilty(btn.dataset.guilty, me.user.uid, on);
+    } catch (err) {
+      console.error(err);
+      btn.classList.toggle('is-on', !on); // 失敗したら戻す
+      toast('うまくいきませんでした');
+    }
+  };
+}
+
+/* ===================== 共有された記録の詳細（コメント） ===================== */
+
+let postStop = [];
+
+function stopPost() {
+  postStop.forEach((fn) => fn());
+  postStop = [];
+}
+
+async function renderPost({ id }) {
+  stopPost();
+
+  if (!me.user) {
+    location.replace('#/feed');
+    return;
+  }
+
+  app.innerHTML = header('記録', { back: '#/feed', backLabel: 'みんなの記録' }) + `
+    <div id="post-slot"><p class="empty">読み込んでいます…</p></div>
+    <h2 class="section-title">コメント</h2>
+    <ul class="comment-list" id="comment-list"><li class="empty">読み込んでいます…</li></ul>
+    <form class="comment-form" id="comment-form">
+      <textarea id="comment-text" rows="2" maxlength="200" placeholder="コメントを書く"></textarea>
+      <button type="submit" class="btn btn-primary" id="comment-send">送信</button>
+    </form>`;
+
+  const slot = $('#post-slot');
+  const list = $('#comment-list');
+
+  postStop.push(cloud.watchPost(
+    id,
+    (post) => {
+      if (!document.body.contains(slot)) return;
+      if (!post) {
+        slot.innerHTML = '<p class="empty">この記録は削除されました。</p>';
+        return;
+      }
+      slot.innerHTML = `<ul class="post-list">${postCard(post)}</ul>`;
+      const btn = slot.querySelector('[data-guilty]');
+      if (btn) {
+        btn.onclick = async () => {
+          const on = !btn.classList.contains('is-on');
+          btn.classList.toggle('is-on', on);
+          try {
+            await cloud.toggleGuilty(post.id, me.user.uid, on);
+          } catch (err) {
+            console.error(err);
+            btn.classList.toggle('is-on', !on);
+            toast('うまくいきませんでした');
+          }
+        };
+      }
+    },
+    (err) => {
+      console.error(err);
+      slot.innerHTML = `<p class="empty">${esc(shareErrorMessage(err))}</p>`;
+    },
+  ));
+
+  postStop.push(cloud.watchComments(
+    id,
+    (comments) => {
+      if (!document.body.contains(list)) return;
+      list.innerHTML = comments.length
+        ? comments.map(commentRow).join('')
+        : '<li class="empty">まだコメントはありません。</li>';
+    },
+    (err) => {
+      console.error(err);
+      list.innerHTML = `<li class="empty">${esc(shareErrorMessage(err))}</li>`;
+    },
+  ));
+
+  // 自分のコメントだけ消せる
+  list.onclick = async (event) => {
+    const btn = event.target.closest('[data-del-comment]');
+    if (!btn) return;
+    if (!confirm('このコメントを削除しますか？')) return;
+    try {
+      await cloud.deleteComment(id, btn.dataset.delComment);
+    } catch (err) {
+      console.error(err);
+      toast('削除できませんでした');
+    }
+  };
+
+  $('#comment-form').onsubmit = async (event) => {
+    event.preventDefault();
+    const box = $('#comment-text');
+    const text = box.value.trim();
+    if (!text) return;
+    const sendBtn = $('#comment-send');
+    sendBtn.disabled = true;
+    try {
+      await cloud.addComment(id, {
+        uid: me.user.uid,
+        nickname: myName(),
+        avatar: me.profile?.avatar ?? null,
+        text,
+      });
+      box.value = '';
+    } catch (err) {
+      console.error(err);
+      toast(shareErrorMessage(err));
+    }
+    sendBtn.disabled = false;
+  };
+}
+
+function commentRow(c) {
+  const mine = me.user && c.uid === me.user.uid;
+  return `
+    <li class="comment">
+      ${avatarChip(c.nickname, c.avatar)}
+      <div class="comment-body">
+        <span class="comment-head">
+          <span class="comment-who">${esc(c.nickname || '名無し')}</span>
+          <span class="comment-when">${esc(whenText(c.createdAt))}</span>
+        </span>
+        <p class="comment-text">${esc(c.text)}</p>
+      </div>
+      ${mine ? `<button type="button" class="comment-del" data-del-comment="${c.id}" aria-label="削除">×</button>` : ''}
+    </li>`;
 }
 
 /* ===================== バックアップ・設定 ===================== */
@@ -1247,6 +1595,94 @@ async function renderSettings() {
       alert('このファイルは読み込めませんでした。このアプリで作成したバックアップファイルを選んでください。');
     }
   };
+}
+
+/* ===================== みんなに共有 ===================== */
+
+// 編集画面の下に出す共有の欄。ログインしていないときは案内だけ出す。
+function shareSection(record) {
+  if (!me.user) {
+    return `<section class="share-box">
+      <h2 class="section-title">みんなに共有</h2>
+      <p class="hint">ログインすると、この記録を身内に共有できます。</p>
+      <a class="btn btn-ghost btn-block" href="#/account">ログイン</a>
+    </section>`;
+  }
+  const shared = Boolean(record.postId);
+  return `<section class="share-box">
+    <h2 class="section-title">みんなに共有</h2>
+    <p class="hint" id="share-state">${shared ? 'この記録は共有中です。' : 'まだ共有していません。'}</p>
+    <button type="button" class="btn ${shared ? 'btn-ghost' : 'btn-primary'} btn-block" id="share-btn">
+      ${shared ? '共有をやめる' : 'みんなに共有する'}
+    </button>
+  </section>`;
+}
+
+// 共有用に写真を少し小さくして、文字列に変換する。
+// Firestoreは1件1MBまでなので、長辺720pxに落としてから送る。
+async function photoForShare(photoId) {
+  if (!photoId) return null;
+  const photo = await db.get('photos', photoId);
+  if (!photo) return null;
+  const small = await resizeImage(new File([photo.blob], 'p.jpg', { type: 'image/jpeg' }), 720, 0.8);
+  return blobToDataUrl(small);
+}
+
+// 共有ボタンの動きをつなぐ。record は編集中の記録。
+function setupShare(record, shopNameText) {
+  const btn = $('#share-btn');
+  if (!btn) return;
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    const wasShared = Boolean(record.postId);
+    try {
+      if (wasShared) {
+        if (!confirm('共有をやめますか？みんなの記録から消えます。')) {
+          btn.disabled = false;
+          return;
+        }
+        await cloud.deletePost(record.postId);
+        await db.put('records', { ...record, postId: null });
+        record.postId = null;
+        toast('共有をやめました');
+      } else {
+        const postId = await cloud.sharePost({
+          uid: me.user.uid,
+          nickname: myName(),
+          avatar: me.profile?.avatar ?? null,
+          shopName: shopNameText,
+          menu: record.menu,
+          date: record.date,
+          score: record.score,
+          comment: record.comment ?? '',
+          photo: await photoForShare(record.photoId),
+        });
+        await db.put('records', { ...record, postId });
+        record.postId = postId;
+        toast('みんなに共有しました');
+      }
+      renderEdit({ id: record.id }); // 表示を作り直す
+    } catch (err) {
+      console.error(err);
+      alert(shareErrorMessage(err));
+      btn.disabled = false;
+    }
+  };
+}
+
+function shareErrorMessage(err) {
+  const code = err?.code ?? '';
+  if (code.includes('permission-denied')) {
+    return 'このアカウントはまだ許可されていません。管理者に確認してください。';
+  }
+  if (code.includes('unavailable') || code.includes('network')) {
+    return '通信できませんでした。電波の良い場所でもう一度お試しください。';
+  }
+  if (String(err?.message ?? '').includes('longer than')) {
+    return '写真が大きすぎて共有できませんでした。';
+  }
+  return 'うまくいきませんでした。もう一度お試しください。';
 }
 
 /* ===================== アカウント（ログイン・プロフィール） ===================== */
@@ -1422,6 +1858,7 @@ function renderProfileForm(slot, user, profile) {
       const next = { nickname, bio: $('#pf-bio').value.trim() };
       if (avatarChange !== undefined) next.avatar = avatarChange; // null なら外す
       await cloud.saveProfile(user.uid, next);
+      me.profile = { ...me.profile, ...next }; // 右上のアイコンなどにすぐ反映させる
       toast('プロフィールを保存しました');
       goBack('#/settings');
     } catch (err) {
@@ -1449,9 +1886,15 @@ const routes = [
   { path: /^\/edit\/([\w-]+)$/, view: renderEdit },
   { path: /^\/settings$/, view: renderSettings },
   { path: /^\/account$/, view: renderAccount },
+  { path: /^\/feed$/, view: renderFeed },
+  { path: /^\/post\/([\w-]+)$/, view: renderPost },
 ];
 
 async function router() {
+  // 前の画面がFirebaseを見張ったままにならないよう、毎回止めてから進む
+  stopFeed();
+  stopPost();
+
   const [path, queryString = ''] = (location.hash.slice(1) || '/').split('?');
   const query = new URLSearchParams(queryString);
 
