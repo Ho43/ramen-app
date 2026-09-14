@@ -175,6 +175,12 @@ export function toggleCommentGuilty(postId, commentId, uid, on) {
   });
 }
 
+// 未読の件数を数えるために、新しい投稿だけを取ってくる
+export async function getRecentPosts(max = 30) {
+  const snap = await getDocs(query(collection(db, 'posts'), orderBy('createdAt', 'desc'), limit(max)));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
 /* ---------- ほかの人のページ ---------- */
 
 // その人が共有した記録を集める。並べ替えは取ってきてからこちらで行う

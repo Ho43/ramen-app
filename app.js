@@ -237,6 +237,40 @@ cloud.watchAuth(async (user) => {
 
 const myName = () => me.profile?.nickname ?? me.user?.email?.split('@')[0] ?? '名無し';
 
+/* ---------- 通知（未読のお知らせ） ---------- */
+
+// 「みんなの記録」を最後に見た時刻。この端末にだけ覚えておく。
+const SEEN_KEY = 'ramen-log:feed-seen';
+
+function feedSeenAt() {
+  return Number(localStorage.getItem(SEEN_KEY) ?? 0);
+}
+
+function markFeedSeen() {
+  localStorage.setItem(SEEN_KEY, String(Date.now()));
+}
+
+// 通知を切っている相手（自分のプロフィールに覚えている）
+const mutedUids = () => me.profile?.mutedUids ?? [];
+const isMuted = (uid) => mutedUids().includes(uid);
+
+// 前回見てから増えた、他の人の共有の数を数える
+async function countUnread() {
+  if (!me.user) return 0;
+  const since = feedSeenAt();
+  if (!since) return 0; // 一度も見ていないうちは知らせない
+  try {
+    const posts = await cloud.getRecentPosts(30);
+    return posts.filter((p) => {
+      const at = (p.createdAt?.seconds ?? 0) * 1000;
+      return at > since && p.uid !== me.user.uid && !isMuted(p.uid);
+    }).length;
+  } catch (err) {
+    console.error(err);
+    return 0;
+  }
+}
+
 // ホーム右上に出すアイコン（プロフィール画像がなければ頭文字）
 function avatarButton() {
   if (!me.user) {
@@ -673,8 +707,8 @@ async function renderHome() {
           <span class="ticket-label">カレンダー</span>
           <span class="ticket-sub">今月 ${monthCount}杯</span>
         </a>
-        <a class="ticket ticket-wide" href="#/feed">
-          <span class="ticket-label">みんなの記録</span>
+        <a class="ticket ticket-wide" href="#/feed" id="feed-ticket">
+          <span class="ticket-label">みんなの記録<span class="badge" id="feed-badge" hidden></span></span>
           <span class="ticket-sub">${me.user ? '共有された一杯を見る' : 'ログインすると使えます'}</span>
         </a>
       </nav>
@@ -687,6 +721,17 @@ async function renderHome() {
 
   const avatar = $('#avatar-btn');
   if (avatar) avatar.onclick = () => openAvatarMenu(avatar);
+
+  // 前回見てから増えた共有の数を、あとから静かに出す
+  if (me.user) {
+    countUnread().then((n) => {
+      const badge = $('#feed-badge');
+      if (!badge || !n) return;
+      badge.textContent = n > 99 ? '99+' : String(n);
+      badge.hidden = false;
+      $('#feed-ticket')?.classList.add('has-new');
+    });
+  }
 }
 
 /* ===================== 図鑑 ===================== */
@@ -1638,16 +1683,26 @@ async function renderFeed() {
     return;
   }
 
+  markFeedSeen(); // 開いた時点で既読にする
   app.innerHTML = header('みんなの記録') + '<ul class="post-list" id="feed"><li class="empty">読み込んでいます…</li></ul>';
   const list = $('#feed');
 
+  let latestPosts = [];
+
   function drawFeed(posts) {
+    latestPosts = posts;
     if (!document.body.contains(list)) return; // もう別の画面に移っている
     list.innerHTML = posts.length
       ? posts.map((post) => postCard(post)).join('')
       : '<li class="empty">まだ誰も共有していません。記録の編集画面から共有できます。</li>';
     restorePop(list);
   }
+
+  // 長押しで、誰が押したのかを見る
+  setupLongPress(list, '[data-guilty]', (btn) => {
+    const post = latestPosts.find((p) => p.id === btn.dataset.guilty);
+    showGuiltyList(post?.guiltyUids ?? []);
+  });
 
   feedStop = cloud.watchFeed(
     async (posts) => {
@@ -1681,14 +1736,72 @@ async function renderFeed() {
   };
 }
 
+// ギルティを押した人の一覧を出す
+async function showGuiltyList(uids) {
+  const host = document.createElement('div');
+  host.className = 'sheet';
+  host.innerHTML = `<div class="sheet-box">
+    <h2 class="sheet-title">ギルティした人</h2>
+    <ul class="sheet-list"><li class="empty">読み込んでいます…</li></ul>
+    <button type="button" class="btn btn-ghost btn-block" data-close>閉じる</button>
+  </div>`;
+  document.body.appendChild(host);
+  host.addEventListener('click', (event) => {
+    if (event.target.closest('[data-close]') || !event.target.closest('.sheet-box')) host.remove();
+  });
+
+  await ensureProfiles(uids);
+  const list = host.querySelector('.sheet-list');
+  if (!document.body.contains(list)) return;
+  list.innerHTML = uids.length
+    ? uids.map((uid) => {
+      const p = profileCache.get(uid);
+      const name = p?.nickname ?? '名無し';
+      return `<li class="sheet-row">${avatarChip(name, p?.avatar)}<span>${esc(name)}</span></li>`;
+    }).join('')
+    : '<li class="empty">まだ誰も押していません。</li>';
+}
+
+// ボタンを長押ししたときだけ別の動きをさせる。
+// 押したままにすると onLong が呼ばれ、そのあとの通常のタップは無視される。
+function setupLongPress(root, selector, onLong) {
+  let timer = null;
+  let fired = false;
+
+  const cancel = () => { clearTimeout(timer); timer = null; };
+
+  root.addEventListener('pointerdown', (event) => {
+    const btn = event.target.closest(selector);
+    if (!btn) return;
+    fired = false;
+    timer = setTimeout(() => {
+      fired = true;
+      navigator.vibrate?.(20);
+      onLong(btn);
+    }, 450);
+  });
+
+  ['pointerup', 'pointercancel', 'pointermove', 'pointerleave'].forEach((type) => {
+    root.addEventListener(type, cancel);
+  });
+
+  // 長押しのあとに続けて起きるタップを止める
+  root.addEventListener('click', (event) => {
+    if (!fired) return;
+    if (!event.target.closest(selector)) return;
+    fired = false;
+    event.stopPropagation();
+    event.preventDefault();
+  }, true);
+}
+
 // 写真を画面いっぱいに開く。2本指でつまむと拡大、ドラッグで動かせる。
 function openPhoto(src) {
   const host = document.createElement('div');
   host.className = 'viewer';
   host.innerHTML = `
     <button type="button" class="viewer-close" data-close aria-label="閉じる">×</button>
-    <div class="viewer-stage"><img class="viewer-img" src="${src}" alt=""></div>
-    <p class="viewer-hint">2本指でつまむと拡大できます</p>`;
+    <div class="viewer-stage"><img class="viewer-img" src="${src}" alt=""></div>`;
   document.body.appendChild(host);
   document.body.classList.add('no-scroll');
 
@@ -1802,6 +1915,15 @@ async function renderPost({ id }) {
   const slot = $('#post-slot');
   const list = $('#comment-list');
   const form = $('#comment-form');
+  let thisPost = null;
+  let theseComments = [];
+
+  // 長押しで、誰が押したのかを見る
+  setupLongPress(slot, '[data-guilty]', () => showGuiltyList(thisPost?.guiltyUids ?? []));
+  setupLongPress(list, '[data-comment-guilty]', (btn) => {
+    const c = theseComments.find((x) => x.id === btn.dataset.commentGuilty);
+    showGuiltyList(c?.guiltyUids ?? []);
+  });
   const openBtn = $('#comment-open');
   const box = $('#comment-text');
   const replyLabel = $('#reply-to');
@@ -1835,6 +1957,7 @@ async function renderPost({ id }) {
         slot.innerHTML = '<p class="empty">この記録は削除されました。</p>';
         return;
       }
+      thisPost = post;
       // 下にコメント欄があるので、ここでは最新コメントを重ねて出さない
       slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false, photoZoom: true })}</ul>`;
       restorePop(slot);
@@ -1863,6 +1986,7 @@ async function renderPost({ id }) {
   ));
 
   function drawComments(comments) {
+    theseComments = comments;
     if (!document.body.contains(list)) return;
     list.innerHTML = comments.length ? commentTree(comments) : '<li class="empty">まだコメントはありません。</li>';
     restorePop(list);
@@ -2040,7 +2164,12 @@ async function renderUser({ id }) {
         <div><dt>最高</dt><dd>${posts.length ? Math.max(...posts.map((p) => p.score)) : '–'}<small>点</small></dd></div>
       </dl>
 
-      ${isMe ? '<a class="btn btn-ghost btn-block" href="#/account">プロフィールを編集</a>' : ''}
+      ${isMe
+        ? '<a class="btn btn-ghost btn-block" href="#/account">プロフィールを編集</a>'
+        : `<button type="button" class="btn btn-ghost btn-block" id="mute-btn">
+             ${isMuted(id) ? 'この人のお知らせを受け取る' : 'この人のお知らせを切る'}
+           </button>
+           <p class="hint">切ると、この人が記録を共有してもホームの件数に数えなくなります。</p>`}
 
       ${showZukan ? `
         <h2 class="section-title">図鑑</h2>
@@ -2054,6 +2183,28 @@ async function renderUser({ id }) {
         ? '<p class="empty">このユーザーは図鑑とカレンダーを公開していません。</p>'
         : ''}
     </section>`;
+
+  // この人のお知らせを受け取るかどうかを切り替える
+  const muteBtn = $('#mute-btn');
+  if (muteBtn) {
+    muteBtn.onclick = async () => {
+      muteBtn.disabled = true;
+      const next = isMuted(id)
+        ? mutedUids().filter((u) => u !== id)
+        : [...mutedUids(), id];
+      try {
+        await cloud.saveProfile(me.user.uid, { mutedUids: next });
+        me.profile = { ...me.profile, mutedUids: next };
+        profileCache.set(me.user.uid, me.profile);
+        toast(next.includes(id) ? 'お知らせを切りました' : 'お知らせを受け取ります');
+        renderUser({ id });
+      } catch (err) {
+        console.error(err);
+        toast(shareErrorMessage(err));
+        muteBtn.disabled = false;
+      }
+    };
+  }
 
   if (showZukan) renderUserZukan($('#user-zukan'), posts);
   if (showCalendar) renderUserCalendar($('#user-cal'), posts);
