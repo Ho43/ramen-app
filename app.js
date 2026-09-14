@@ -95,8 +95,23 @@ function enableSwipeBack(target) {
 
   const width = () => window.innerWidth || 1;
 
+  // 横の動きを自分で使っている場所から始まったかどうか
   function inBusyArea(node) {
-    return Boolean(node?.closest?.('.cal-stage, .cropper, input[type="range"], .zukan'));
+    return Boolean(node?.closest?.('.cal-stage, .cropper, input[type="range"]'));
+  }
+
+  // 記録の画面では切っておく。点数のスライダーを動かすときに
+  // 誤って戻ってしまうのを防ぐため。
+  function swipeOff(path) {
+    return path === '/new' || path.startsWith('/edit/');
+  }
+
+  // カレンダーでは、日付の下にある区切り線より下だけで反応させる。
+  // マス目の上は月送りに使うので、はっきり分けておく。
+  function belowCalendarLine(y) {
+    const line = app.querySelector('.day-panel .section-title');
+    if (!line) return true;
+    return y > line.getBoundingClientRect().bottom;
   }
 
   function place(offset, animate) {
@@ -105,11 +120,16 @@ function enableSwipeBack(target) {
   }
 
   target.addEventListener('touchstart', (event) => {
-    if (busy || event.touches.length !== 1 || !parentOf(currentPath()) || inBusyArea(event.target)) {
+    const path = currentPath();
+    if (busy || event.touches.length !== 1 || !parentOf(path) || swipeOff(path) || inBusyArea(event.target)) {
       tracking = false;
       return;
     }
     const t = event.touches[0];
+    if (path === '/calendar' && !belowCalendarLine(t.clientY)) {
+      tracking = false;
+      return;
+    }
     tracking = true;
     horizontal = false;
     startX = lastX = t.clientX;
@@ -1045,9 +1065,21 @@ async function renderEdit({ id }) {
   await renderForm({ record });
 }
 
+// 新しい記録の書きかけを覚えておく置き場所。
+// 別の画面に移っても、戻ってきたら続きから書けるようにするため。
+// 記録し終えたら空にする。
+let draft = null;
+
+function clearDraft() {
+  if (draft?.previewUrl) URL.revokeObjectURL(draft.previewUrl);
+  draft = null;
+}
+
 async function renderForm({ record = null, presetShopId = null, presetDate = null }) {
   const isEdit = Boolean(record);
   const { shops, records } = await loadAll();
+  // 書きかけがあれば、そこから復元する（新規記録のときだけ）
+  const saved0 = isEdit ? null : draft;
 
   // お店ごとの記録回数と、最後に行った日
   const counts = new Map();
@@ -1062,12 +1094,15 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
 
   let selectedShop = '';
   if (record) selectedShop = record.shopId;
+  else if (saved0 && (saved0.shopId === '__new' || shops.some((s) => s.id === saved0.shopId))) selectedShop = saved0.shopId;
   else if (shops.some((s) => s.id === presetShopId)) selectedShop = presetShopId;
   else if (!shops.length) selectedShop = '__new';
 
-  const score = record?.score ?? 50;
-  const date = record?.date ?? (/^\d{4}-\d{2}-\d{2}$/.test(presetDate ?? '') ? presetDate : todayStr());
-  const currentPhotoUrl = record ? await getPhotoUrl(record.photoId) : null;
+  const score = record?.score ?? saved0?.score ?? 50;
+  const date = record?.date
+    ?? saved0?.date
+    ?? (/^\d{4}-\d{2}-\d{2}$/.test(presetDate ?? '') ? presetDate : todayStr());
+  const currentPhotoUrl = record ? await getPhotoUrl(record.photoId) : (saved0?.previewUrl ?? null);
 
   app.innerHTML = header(isEdit ? '記録を編集' : '記録する', { back: 'history' }) + `
     <form class="form" id="rec-form" novalidate>
@@ -1079,14 +1114,14 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
             <option value="${s.id}" ${s.id === selectedShop ? 'selected' : ''}>${esc(s.name)}（${counts.get(s.id) ?? 0}回）</option>`).join('')}
           <option value="__new" ${selectedShop === '__new' ? 'selected' : ''}>＋ 初めてのお店</option>
         </select>
-        <input id="f-newshop" type="text" placeholder="店名を入力" maxlength="50" autocomplete="off" hidden>
-        <input id="f-newaddress" type="text" placeholder="住所（任意。入れると地図で開けます）" maxlength="120" autocomplete="off" hidden>
+        <input id="f-newshop" type="text" placeholder="店名を入力" maxlength="50" autocomplete="off" hidden value="${esc(saved0?.newShop)}">
+        <input id="f-newaddress" type="text" placeholder="住所（任意。入れると地図で開けます）" maxlength="120" autocomplete="off" hidden value="${esc(saved0?.newAddress)}">
         <p class="hint" id="f-count"></p>
       </div>
 
       <div class="field">
         <label for="f-menu">食べたもの</label>
-        <input id="f-menu" type="text" placeholder="例：特製醤油ラーメン" maxlength="60" autocomplete="off" value="${esc(record?.menu)}">
+        <input id="f-menu" type="text" placeholder="例：特製醤油ラーメン" maxlength="60" autocomplete="off" value="${esc(record?.menu ?? saved0?.menu)}">
       </div>
 
       <div class="field">
@@ -1128,14 +1163,16 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
 
       <div class="field">
         <label for="f-comment">一言コメント<small>（なくても記録できます）</small></label>
-        <textarea id="f-comment" rows="3" maxlength="200" placeholder="その時感じたこと">${esc(record?.comment)}</textarea>
+        <textarea id="f-comment" rows="3" maxlength="200" placeholder="その時感じたこと">${esc(record?.comment ?? saved0?.comment)}</textarea>
       </div>
 
       ${!isEdit && me.user ? `
       <label class="check-row">
-        <input type="checkbox" id="f-share" ${shareByDefault ? 'checked' : ''}>
+        <input type="checkbox" id="f-share" ${(saved0 ? saved0.share : shareByDefault) ? 'checked' : ''}>
         <span>記録と同時にみんなへ共有する</span>
       </label>` : ''}
+
+      ${saved0 ? '<p class="hint draft-note">書きかけの内容を復元しました。<button type="button" class="mini-btn" id="f-reset">最初から入力する</button></p>' : ''}
 
       <p class="form-error" id="f-error" role="alert"></p>
       <button type="submit" class="btn btn-primary btn-block" id="f-submit">${isEdit ? '変更を保存' : '記録する'}</button>
@@ -1198,6 +1235,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       scoreWord.textContent = TIER_WORD[tier];
       scoreBox.classList.toggle('is-guilty', tier === 3);
     }
+    keepDraft();
   }
   scoreRange.oninput = () => setScore(Number(scoreRange.value));
   app.querySelectorAll('[data-step]').forEach((btn) => {
@@ -1208,7 +1246,9 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
   // photoChange: undefined = 変更なし / null = 外す / Blob = 新しい写真
   let photoChange;
   let previewUrl = null;
-  let sourceFile = null; // 切り抜き直せるよう、選んだ元の写真を覚えておく
+  let sourceFile = saved0?.sourceFile ?? null; // 切り抜き直せるよう、選んだ元の写真を覚えておく
+  if (saved0?.photoBlob) photoChange = saved0.photoBlob;
+  if (saved0?.previewUrl) previewUrl = saved0.previewUrl;
 
   function showPhoto(url) {
     preview.hidden = !url;
@@ -1231,6 +1271,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       previewUrl = URL.createObjectURL(blob);
       showPhoto(previewUrl);
+      keepDraft();
     } catch (err) {
       console.error(err);
       errorEl.textContent = '写真を読み込めませんでした。別の写真を選んでください。';
@@ -1251,7 +1292,39 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
     photoChange = null;
     sourceFile = null;
     showPhoto(null);
+    keepDraft();
   };
+
+  // --- 書きかけを覚える（新規記録のときだけ） ---
+  function keepDraft() {
+    if (isEdit) return;
+    draft = {
+      shopId: shopSelect.value,
+      newShop: newShopInput.value,
+      newAddress: newAddressInput.value,
+      menu: $('#f-menu').value,
+      date: $('#f-date').value,
+      score: Number(scoreRange.value),
+      comment: $('#f-comment').value,
+      share: $('#f-share')?.checked ?? false,
+      photoBlob: photoChange instanceof Blob ? photoChange : null,
+      previewUrl,
+      sourceFile,
+    };
+  }
+
+  if (!isEdit) {
+    // 入力のたびに覚えるので、途中で別の画面に移っても続きから書ける
+    app.querySelectorAll('input, select, textarea').forEach((el) => {
+      el.addEventListener('input', keepDraft);
+      el.addEventListener('change', keepDraft);
+    });
+  }
+
+  $('#f-reset')?.addEventListener('click', () => {
+    clearDraft();
+    renderNew({ query: new URLSearchParams() });
+  });
 
   // --- 保存 ---
   $('#rec-form').onsubmit = async (event) => {
@@ -1316,6 +1389,9 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       askPersist();
       lastSavedId = saved.id; // ホームに戻った直後だけ、この一杯について話させる
+      if (!isEdit) {
+        draft = null; // 記録できたので書きかけは捨てる（表示中のURLはこのあと解放される）
+      }
 
       const name = shop?.name ?? shops.find((s) => s.id === shopId)?.name;
       const nth = (counts.get(shopId) ?? 0) + 1;
@@ -1498,9 +1574,14 @@ function commentIcon() {
   </svg>`;
 }
 
-function postCard(post, { withLastComment = true } = {}) {
+function postCard(post, { withLastComment = true, photoZoom = false } = {}) {
   const photo = post.photo
-    ? `<div class="post-photo"><img src="${post.photo}" alt="" loading="lazy"></div>`
+    ? (photoZoom
+      // 詳細画面では、写真を押すと大きく見られる
+      ? `<button type="button" class="post-photo is-zoomable" data-zoom aria-label="写真を拡大">
+           <img src="${post.photo}" alt="">
+         </button>`
+      : `<div class="post-photo"><img src="${post.photo}" alt="" loading="lazy"></div>`)
     : '';
   const comment = (post.comment ?? '').trim();
   return `
@@ -1600,6 +1681,86 @@ async function renderFeed() {
   };
 }
 
+// 写真を画面いっぱいに開く。2本指でつまむと拡大、ドラッグで動かせる。
+function openPhoto(src) {
+  const host = document.createElement('div');
+  host.className = 'viewer';
+  host.innerHTML = `
+    <button type="button" class="viewer-close" data-close aria-label="閉じる">×</button>
+    <div class="viewer-stage"><img class="viewer-img" src="${src}" alt=""></div>
+    <p class="viewer-hint">2本指でつまむと拡大できます</p>`;
+  document.body.appendChild(host);
+  document.body.classList.add('no-scroll');
+
+  const img = host.querySelector('.viewer-img');
+  const stage = host.querySelector('.viewer-stage');
+  let k = 1;   // 拡大の倍率
+  let tx = 0;  // 位置
+  let ty = 0;
+
+  function apply() {
+    img.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
+  }
+
+  const points = new Map();
+  let pinch = null;
+
+  stage.addEventListener('pointerdown', (event) => {
+    stage.setPointerCapture(event.pointerId);
+    points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    pinch = null;
+  });
+
+  stage.addEventListener('pointermove', (event) => {
+    if (!points.has(event.pointerId)) return;
+    const prev = points.get(event.pointerId);
+    points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    if (points.size >= 2) {
+      const [a, b] = [...points.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch) k = Math.max(1, Math.min(5, k * (dist / pinch.dist)));
+      pinch = { dist };
+      if (k === 1) { tx = 0; ty = 0; }
+      apply();
+    } else if (k > 1) {
+      tx += event.clientX - prev.x;
+      ty += event.clientY - prev.y;
+      apply();
+    }
+  });
+
+  function release(event) {
+    points.delete(event.pointerId);
+    if (points.size < 2) pinch = null;
+  }
+  stage.addEventListener('pointerup', release);
+  stage.addEventListener('pointercancel', release);
+
+  // 画像を2回たたくと、拡大と等倍を行き来する
+  let lastTap = 0;
+  stage.addEventListener('click', () => {
+    const now = Date.now();
+    if (now - lastTap < 300) {
+      k = k > 1 ? 1 : 2.5;
+      tx = 0;
+      ty = 0;
+      apply();
+    }
+    lastTap = now;
+  });
+
+  function close() {
+    document.body.classList.remove('no-scroll');
+    host.remove();
+  }
+
+  host.addEventListener('click', (event) => {
+    // 画像の外側を押すか、×を押すと閉じる
+    if (event.target.closest('[data-close]') || !event.target.closest('.viewer-img')) close();
+  });
+}
+
 /* ===================== 共有された記録の詳細（コメント） ===================== */
 
 let postStop = [];
@@ -1675,8 +1836,10 @@ async function renderPost({ id }) {
         return;
       }
       // 下にコメント欄があるので、ここでは最新コメントを重ねて出さない
-      slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false })}</ul>`;
+      slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false, photoZoom: true })}</ul>`;
       restorePop(slot);
+      const zoom = slot.querySelector('[data-zoom]');
+      if (zoom) zoom.onclick = () => openPhoto(post.photo);
       const btn = slot.querySelector('[data-guilty]');
       if (btn) {
         btn.onclick = async () => {

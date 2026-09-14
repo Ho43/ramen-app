@@ -6,7 +6,7 @@
 // ※ 記録データ（IndexedDB）はここでは扱いません。
 // =====================================================
 
-const CACHE_NAME = 'ramen-log-v16';
+const CACHE_NAME = 'ramen-log-v17';
 const APP_FILES = [
   './',
   './index.html',

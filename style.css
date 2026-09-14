@@ -1265,6 +1265,80 @@ textarea { resize: vertical; }
   to { transform: translateY(0); opacity: 1; }
 }
 
+/* ---------- 写真の拡大表示 ---------- */
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: env(safe-area-inset-top) 12px env(safe-area-inset-bottom);
+  background: rgba(8, 7, 6, 0.96);
+}
+
+.viewer-close {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top));
+  right: 12px;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--cream);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* touch-action: none で画面スクロールを止め、指の動きを拡大に使う */
+.viewer-stage {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  max-width: 560px;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.viewer-img {
+  max-width: 100%;
+  max-height: 76vh;
+  border-radius: 8px;
+  transform-origin: center;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.viewer-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* 拡大できる写真は、押すと少しへこむ */
+.post-photo.is-zoomable {
+  padding: 0;
+  border: none;
+  cursor: zoom-in;
+  transition: transform 0.1s;
+}
+
+.post-photo.is-zoomable:active { transform: scale(0.96); }
+
+.draft-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 16px;
+}
+
+/* ---------- 写真の拡大表示ここまで ---------- */
+
 /* ---------- コメントまわり ---------- */
 .icon-btn {
   display: inline-flex;
