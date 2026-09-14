@@ -774,6 +774,16 @@ textarea { resize: vertical; }
   color: #E8836F;
 }
 
+/* ---------- アカウント ---------- */
+.account { padding-bottom: 24px; }
+
+.avatar-pick {
+  aspect-ratio: 1;
+  max-width: 160px;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
 /* ---------- 切り抜き画面（トリミング） ---------- */
 .no-scroll { overflow: hidden; }
 

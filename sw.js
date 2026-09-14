@@ -6,13 +6,15 @@
 // ※ 記録データ（IndexedDB）はここでは扱いません。
 // =====================================================
 
-const CACHE_NAME = 'ramen-log-v6';
+const CACHE_NAME = 'ramen-log-v8';
 const APP_FILES = [
   './',
   './index.html',
   './style.css',
   './app.js',
   './db.js',
+  './cloud.js',
+  './firebase-config.js',
   './giruchiki.png',
   './manifest.json',
   './icons/icon-192.png',

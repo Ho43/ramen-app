@@ -12,6 +12,7 @@
 // =====================================================
 
 import * as db from './db.js';
+import * as cloud from './cloud.js';
 
 const app = document.getElementById('app');
 const $ = (selector) => app.querySelector(selector);
@@ -350,33 +351,44 @@ function streakDays(records, endDate) {
   return n;
 }
 
-// ホームでギルチキが話す一言を決める。
-// 珍しい出来事ほど先に出し、当てはまらなければ点数に応じた一言を返す。
-function chikiTalk(records, last) {
-  if (!last) return '一杯目、待ってる。';
+// 記録した直後だけ、その一杯についてギルチキに話させるための目印
+let lastSavedId = null;
 
-  const total = records.length;
-  if (total === 100) return '100杯。おめでとう。';
-  if (total === 50) return '50杯。数字がもう怖い。';
-  if (total === 10) return '10杯突破。';
+// ギルチキが話す一言を選ぶ。
+// 当てはまるセリフをすべて集めてから、その中からランダムに1つ選ぶ。
+// 優先順位をつけていないので、同じ一杯でも開くたびに違う一言になる。
+function chikiTalk(records, subject) {
+  if (!subject) return '一杯目、待ってる。';
 
-  const shopCount = records.filter((r) => r.shopId === last.shopId).length;
-  if (shopCount === 10) return '10回目。もう家だろ。';
-  if (shopCount === 5) return '常連だな。';
-  if (shopCount === 3) return 'またここか。好きだな。';
+  // まずは点数に応じた3つ
+  const pool = [...TIER_TALK[faceTier(subject.score)]];
 
-  const streak = streakDays(records, last.date);
-  if (streak >= 5) return 'もう生活だな。';
-  if (streak >= 3) return `${streak}日続けて……ギルティ。`;
+  // その一杯が通算何杯目・その店で何回目だったかを数える
+  const order = [...records].sort(byOldest);
+  const idx = order.findIndex((r) => r.id === subject.id);
+  const nth = idx + 1;
+  const shopNth = order.slice(0, idx + 1).filter((r) => r.shopId === subject.shopId).length;
 
-  const hour = new Date(last.createdAt).getHours();
-  if (hour >= 2 && hour < 5) return 'もう朝じゃないか。';
-  if (hour >= 22 || hour < 2) return 'こんな時間に……ギルティ。';
-  if (hour >= 5 && hour < 10) return '朝から行ったのか。';
+  if (nth === 10) pool.push('10杯突破。');
+  if (nth === 50) pool.push('50杯。数字がもう怖い。');
+  if (nth === 100) pool.push('100杯。おめでとう。');
 
-  if (shopCount === 1) return '新規開拓だな。';
-  if (streak === 2) return '2日連続か。';
-  return pick(TIER_TALK[faceTier(last.score)]);
+  if (shopNth === 1) pool.push('新規開拓だな。');
+  if (shopNth === 3) pool.push('またここか。好きだな。');
+  if (shopNth === 5) pool.push('常連だな。');
+  if (shopNth === 10) pool.push('10回目。もう家だろ。');
+
+  const streak = streakDays(records, subject.date);
+  if (streak === 2) pool.push('2日連続か。');
+  if (streak === 3 || streak === 4) pool.push(`${streak}日続けて……ギルティ。`);
+  if (streak >= 5) pool.push('もう生活だな。');
+
+  const hour = new Date(subject.createdAt).getHours();
+  if (hour >= 5 && hour < 10) pool.push('朝から行ったのか。');
+  if (hour >= 22 || hour < 2) pool.push('こんな時間に……ギルティ。');
+  if (hour >= 2 && hour < 5) pool.push('もう朝じゃないか。');
+
+  return pick(pool);
 }
 
 // 95点以上で保存したときの演出
@@ -398,13 +410,17 @@ async function renderHome() {
   const { shops, records, shopMap } = await loadAll();
   const thisMonth = todayStr().slice(0, 7);
   const monthCount = records.filter((r) => r.date.startsWith(thisMonth)).length;
-  const recent = [...records].sort(byNewest).slice(0, 5);
+  const newest = [...records].sort(byNewest);
+  const recent = newest.slice(0, 5);
 
-  // ギルチキは最後に食べた一杯に反応する
-  const last = recent[0];
-  const talk = chikiTalk(records, last);
-  const talkSub = last
-    ? `${shopName(shopMap, last.shopId)}・${last.score}点`
+  // 記録した直後はその一杯について話す。
+  // それ以外は最近の10杯から毎回選び直すので、開くたびに話題が変わる。
+  const justSaved = lastSavedId ? records.find((r) => r.id === lastSavedId) : null;
+  lastSavedId = null;
+  const subject = justSaved ?? (newest.length ? pick(newest.slice(0, 10)) : null);
+  const talk = chikiTalk(records, subject);
+  const talkSub = subject
+    ? `${shopName(shopMap, subject.shopId)}・${subject.score}点`
     : '記録するボタンから始められる';
 
   app.innerHTML = `
@@ -417,7 +433,7 @@ async function renderHome() {
       </p>
 
       <div class="greet">
-        ${mascot(last?.score ?? 50)}
+        ${mascot(subject?.score ?? 50)}
         <p class="greet-talk">${esc(talk)}<small>${esc(talkSub)}</small></p>
       </div>
 
@@ -1058,6 +1074,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       if (oldPhotoId) forgetPhotoUrl(oldPhotoId);
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       askPersist();
+      lastSavedId = saved.id; // ホームに戻った直後だけ、この一杯について話させる
 
       const name = shop?.name ?? shops.find((s) => s.id === shopId)?.name;
       const nth = (counts.get(shopId) ?? 0) + 1;
@@ -1156,6 +1173,10 @@ async function renderSettings() {
 
       <h2 class="section-title">保存状況</h2>
       <p>お店 ${shops.length}店　記録 ${records.length}件<span id="usage"></span></p>
+
+      <h2 class="section-title">みんなに共有</h2>
+      <p>身内で記録を見せ合う機能です。まずログインしてください。</p>
+      <a class="btn btn-ghost btn-block" href="#/account">アカウント</a>
     </section>`;
 
   navigator.storage?.estimate?.()
@@ -1228,7 +1249,196 @@ async function renderSettings() {
   };
 }
 
-/* ===================== 画面の切り替え ===================== */
+/* ===================== アカウント（ログイン・プロフィール） ===================== */
+
+async function renderAccount() {
+  app.innerHTML = header('アカウント') + `<section class="account" id="account-slot">
+    <p class="empty">確認しています…</p>
+  </section>`;
+  const slot = $('#account-slot');
+
+  // ログイン状態を1回だけ確認する（画面はこのあと自分で作り直すので、以降の変化は見ない）
+  let unsubscribe = () => {};
+  let handled = false;
+  unsubscribe = cloud.watchAuth(async (user) => {
+    if (handled) return; // 2回目以降の通知は無視する
+    handled = true;
+    unsubscribe();
+    if (!user) {
+      renderLoginForm(slot);
+      return;
+    }
+    let profile = null;
+    try {
+      profile = await cloud.getProfile(user.uid);
+    } catch (err) {
+      console.error(err);
+    }
+    renderProfileForm(slot, user, profile);
+  });
+}
+
+function renderLoginForm(slot) {
+  slot.innerHTML = `
+    <p>身内だけで記録を見せ合うための、簡単なログインです。まだ登録していなければ、下のフォームでそのまま作成できます。</p>
+
+    <form id="auth-form" novalidate>
+      <div class="field">
+        <label for="auth-email">メールアドレス</label>
+        <input id="auth-email" type="email" autocomplete="email" required>
+      </div>
+      <div class="field">
+        <label for="auth-password">パスワード<small>（6文字以上）</small></label>
+        <input id="auth-password" type="password" autocomplete="current-password" required minlength="6">
+      </div>
+      <p class="form-error" id="auth-error" role="alert"></p>
+      <button type="submit" class="btn btn-primary btn-block" id="auth-submit">ログイン</button>
+      <button type="button" class="btn btn-ghost btn-block" id="auth-toggle">初めての方はこちら（新規登録）</button>
+    </form>`;
+
+  const form = $('#auth-form');
+  const submitBtn = $('#auth-submit');
+  const toggleBtn = $('#auth-toggle');
+  const errorEl = $('#auth-error');
+  let mode = 'signin';
+
+  toggleBtn.onclick = () => {
+    mode = mode === 'signin' ? 'signup' : 'signin';
+    submitBtn.textContent = mode === 'signin' ? 'ログイン' : 'アカウントを作成';
+    toggleBtn.textContent = mode === 'signin' ? '初めての方はこちら（新規登録）' : 'すでに登録済みの方はこちら';
+    errorEl.textContent = '';
+  };
+
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    errorEl.textContent = '';
+    const email = $('#auth-email').value.trim();
+    const password = $('#auth-password').value;
+    submitBtn.disabled = true;
+    try {
+      if (mode === 'signin') await cloud.signIn(email, password);
+      else await cloud.signUp(email, password);
+      renderAccount();
+    } catch (err) {
+      console.error(err);
+      errorEl.textContent = authErrorMessage(err);
+      submitBtn.disabled = false;
+    }
+  };
+}
+
+// Firebaseのエラーコードを、画面にそのまま出しても分かる日本語にする
+function authErrorMessage(err) {
+  const code = err?.code ?? '';
+  if (code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found')) {
+    return 'メールアドレスかパスワードが違います。';
+  }
+  if (code.includes('email-already-in-use')) return 'このメールアドレスはすでに登録されています。';
+  if (code.includes('weak-password')) return 'パスワードは6文字以上にしてください。';
+  if (code.includes('invalid-email')) return 'メールアドレスの形式が正しくありません。';
+  if (code.includes('permission-denied')) return 'このアカウントはまだ許可されていません。管理者に確認してください。';
+  if (code.includes('network')) return '通信できませんでした。電波の良い場所でもう一度お試しください。';
+  return 'うまくいきませんでした。もう一度お試しください。';
+}
+
+function renderProfileForm(slot, user, profile) {
+  const avatarUrl = profile?.avatar ?? null;
+
+  slot.innerHTML = `
+    <p class="hint">${esc(user.email)} でログイン中</p>
+
+    <form id="profile-form" novalidate>
+      <div class="field">
+        <span class="label">アイコン<small>（なくても登録できます）</small></span>
+        <div class="photo-pick avatar-pick">
+          <img id="pf-preview" alt="選んだアイコン" ${avatarUrl ? '' : 'hidden'} ${avatarUrl ? `src="${avatarUrl}"` : ''}>
+          <span id="pf-noimage" ${avatarUrl ? 'hidden' : ''}>${noImage}</span>
+        </div>
+        <div class="photo-actions">
+          <label class="btn btn-ghost">
+            画像を選ぶ
+            <input id="pf-photo" type="file" accept="image/*" class="visually-hidden">
+          </label>
+          <button type="button" class="btn btn-ghost" id="pf-photo-remove" ${avatarUrl ? '' : 'hidden'}>外す</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="pf-name">ニックネーム</label>
+        <input id="pf-name" type="text" maxlength="20" required value="${esc(profile?.nickname)}" placeholder="例：ほし">
+      </div>
+
+      <div class="field">
+        <label for="pf-bio">一言紹介<small>（なくても登録できます）</small></label>
+        <textarea id="pf-bio" rows="2" maxlength="60" placeholder="よろしくお願いします">${esc(profile?.bio)}</textarea>
+      </div>
+
+      <p class="form-error" id="pf-error" role="alert"></p>
+      <button type="submit" class="btn btn-primary btn-block" id="pf-submit">保存する</button>
+    </form>
+
+    <button type="button" class="btn btn-ghost btn-block" id="pf-logout">ログアウト</button>`;
+
+  const preview = $('#pf-preview');
+  const noImageEl = $('#pf-noimage');
+  const removeBtn = $('#pf-photo-remove');
+  const errorEl = $('#pf-error');
+  let avatarChange; // undefined = 変更なし / null = 外す / 'data:...' = 新しい画像
+
+  function showAvatar(url) {
+    preview.hidden = !url;
+    noImageEl.hidden = Boolean(url);
+    removeBtn.hidden = !url;
+    if (url) preview.src = url;
+  }
+
+  $('#pf-photo').onchange = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    errorEl.textContent = '';
+    const blob = await cropImage(file);
+    if (!blob) return; // やめるを押した
+    avatarChange = await blobToDataUrl(blob);
+    showAvatar(avatarChange);
+  };
+
+  removeBtn.onclick = () => {
+    avatarChange = null;
+    showAvatar(null);
+  };
+
+  $('#profile-form').onsubmit = async (event) => {
+    event.preventDefault();
+    errorEl.textContent = '';
+    const nickname = $('#pf-name').value.trim();
+    if (!nickname) {
+      errorEl.textContent = 'ニックネームを入力してください。';
+      return;
+    }
+    const submitBtn = $('#pf-submit');
+    submitBtn.disabled = true;
+    try {
+      const next = { nickname, bio: $('#pf-bio').value.trim() };
+      if (avatarChange !== undefined) next.avatar = avatarChange; // null なら外す
+      await cloud.saveProfile(user.uid, next);
+      toast('プロフィールを保存しました');
+      goBack('#/settings');
+    } catch (err) {
+      console.error(err);
+      errorEl.textContent = authErrorMessage(err);
+      submitBtn.disabled = false;
+    }
+  };
+
+  $('#pf-logout').onclick = async () => {
+    if (!confirm('ログアウトしますか？')) return;
+    await cloud.signOutUser();
+    renderAccount();
+  };
+}
+
+
 
 const routes = [
   { path: /^\/$/, view: renderHome },
@@ -1238,6 +1448,7 @@ const routes = [
   { path: /^\/new$/, view: renderNew },
   { path: /^\/edit\/([\w-]+)$/, view: renderEdit },
   { path: /^\/settings$/, view: renderSettings },
+  { path: /^\/account$/, view: renderAccount },
 ];
 
 async function router() {
