@@ -684,13 +684,13 @@ const COSTUMES = [
 
 const costumeById = (id) => COSTUMES.find((c) => c.id === id) ?? null;
 
-let chikiState = { points: 0, lastFed: null, owned: [], equipped: null };
+let chikiState = { points: 0, lastFed: null, owned: [], equipped: null, redeemedCodes: [] };
 let chikiReady = false;
 
 async function loadChikiState() {
   try {
     const saved = await db.get('chiki', 'me');
-    if (saved) chikiState = { points: 0, lastFed: null, owned: [], equipped: null, ...saved };
+    if (saved) chikiState = { points: 0, lastFed: null, owned: [], equipped: null, redeemedCodes: [], ...saved };
   } catch (err) {
     console.error(err);
   }
@@ -705,17 +705,61 @@ function fedToday() {
   return chikiState.lastFed === todayStr();
 }
 
-// 餌をあげる。1日1回だけ、ランダムなポイントがもらえる
+// 餌やりでもらえるポイントの候補と、出やすさ（重み）。
+// 重みの合計は100でなくてよく、比率だけが意味を持つ
+const FEED_REWARDS = [
+  { amount: 1, weight: 50 },
+  { amount: 3, weight: 35 },
+  { amount: 5, weight: 7 },
+  { amount: 10, weight: 3 },
+  { amount: 15, weight: 1 },
+  { amount: 30, weight: 0.5 },
+  { amount: 100, weight: 0.001 },
+];
+
+function weightedPick(items) {
+  const total = items.reduce((sum, x) => sum + x.weight, 0);
+  let r = Math.random() * total;
+  for (const item of items) {
+    r -= item.weight;
+    if (r <= 0) return item;
+  }
+  return items[items.length - 1];
+}
+
+// 餌をあげる。1日1回だけ、決まった候補の中からランダムなポイントがもらえる
 async function feedChiki() {
   if (fedToday()) return null;
-  const amount = 3 + Math.floor(Math.random() * 10); // 3〜12
+  const amount = weightedPick(FEED_REWARDS).amount;
   chikiState = { ...chikiState, points: chikiState.points + amount, lastFed: todayStr() };
   await saveChikiState();
   return amount;
 }
 
-const GACHA_COST = 15;
-const RARITY_WEIGHT = { 1: 60, 2: 30, 3: 10 };
+const GACHA_COST = 30;
+const RARITY_WEIGHT = { 1: 75, 2: 22, 3: 3 };
+
+// テストプレイ用の引き換えコード。1人1回だけ使える（chikiState.redeemedCodes に記録する）。
+// ガチャを何十回も試せるよう、多めのポイントにしてある
+const REDEEM_CODES = {
+  GACHA2026: 3000,
+};
+
+// コードを使う。amount = もらえたポイント（失敗時は null）、reason = 失敗の理由
+async function redeemCode(input) {
+  const code = input.trim().toUpperCase();
+  if (!code) return { amount: null, reason: 'empty' };
+  const amount = REDEEM_CODES[code];
+  if (amount == null) return { amount: null, reason: 'invalid' };
+  if (chikiState.redeemedCodes.includes(code)) return { amount: null, reason: 'used' };
+  chikiState = {
+    ...chikiState,
+    points: chikiState.points + amount,
+    redeemedCodes: [...chikiState.redeemedCodes, code],
+  };
+  await saveChikiState();
+  return { amount, reason: null };
+}
 
 // ガチャを1回引く。持っている衣装が出たら、代わりにポイントを返す
 async function drawGacha() {
@@ -2707,6 +2751,15 @@ async function renderSettings() {
 
       <h2 class="section-title">ギルチキ</h2>
       <a class="btn btn-ghost btn-block" href="#/gacha">ガチャ・持っている衣装</a>
+
+      <div class="field">
+        <label for="redeem-code">コードを入力</label>
+        <div class="redeem-row">
+          <input id="redeem-code" type="text" autocomplete="off" autocapitalize="characters" placeholder="コードを入力">
+          <button type="button" class="btn btn-ghost" id="redeem-btn">使う</button>
+        </div>
+        <p class="form-error" id="redeem-error" role="alert"></p>
+      </div>
     </section>`;
 
   navigator.storage?.estimate?.()
@@ -2714,6 +2767,22 @@ async function renderSettings() {
       if (usage != null) $('#usage').textContent = `　使用容量 約${(usage / 1024 / 1024).toFixed(1)}MB`;
     })
     .catch(() => {});
+
+  $('#redeem-btn').onclick = async () => {
+    const input = $('#redeem-code');
+    const errorEl = $('#redeem-error');
+    errorEl.textContent = '';
+    await loadChikiState(); // 他の画面で使った直後でも、最新の状態を見てから判定する
+    const { amount, reason } = await redeemCode(input.value);
+    if (amount != null) {
+      input.value = '';
+      toast(`コードを使いました。+${amount}pt`);
+      return;
+    }
+    errorEl.textContent = reason === 'used' ? 'このコードはすでに使いました。'
+      : reason === 'empty' ? 'コードを入力してください。'
+      : 'そのコードは使えません。';
+  };
 
   let backupFile = null;
 

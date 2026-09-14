@@ -1737,6 +1737,20 @@ textarea { resize: vertical; }
 
 .pw-eye[aria-pressed="true"] { color: var(--yolk); }
 
+/* 引き換えコードの入力欄 */
+.redeem-row {
+  display: flex;
+  gap: 8px;
+}
+
+.redeem-row input { flex: 1; }
+
+.redeem-row .btn {
+  flex-shrink: 0;
+  min-height: 48px;
+  padding: 0 18px;
+}
+
 /* ---------- アカウント ---------- */
 .account { padding-bottom: 24px; }
 
