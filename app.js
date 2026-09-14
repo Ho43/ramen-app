@@ -209,6 +209,7 @@ cloud.watchAuth(async (user) => {
     }
   }
   me.ready = true;
+  if (user) profileCache.set(user.uid, me.profile);
   // ログイン状態で見た目が変わる画面だけ描き直す
   const path = (location.hash.slice(1) || '/').split('?')[0];
   if (path === '/' || path === '/feed' || path.startsWith('/post/')) router();
@@ -1416,6 +1417,37 @@ function avatarChip(nickname, avatar) {
     : `<span class="chip-avatar is-letter">${esc(name.slice(0, 1))}</span>`;
 }
 
+// 一度読んだプロフィールは覚えておく。
+// 投稿に書き込まれた名前やアイコンは投稿した時点のものなので、
+// あとからアイコンを変えても古い投稿に反映されない。
+// そこで、最新のプロフィールが分かっていればそちらを優先して使う。
+const profileCache = new Map();
+
+function avatarFor(uid, nickname, avatar) {
+  const p = profileCache.get(uid);
+  return avatarChip(p?.nickname ?? nickname, p?.avatar ?? avatar);
+}
+
+function nameFor(uid, nickname) {
+  return profileCache.get(uid)?.nickname ?? nickname ?? '名無し';
+}
+
+// まだ読んでいない人のプロフィールをまとめて取りに行く。
+// 新しく読めたものがあれば true を返す（呼び出し側で描き直すため）
+async function ensureProfiles(uids) {
+  const missing = [...new Set(uids.filter((u) => u && !profileCache.has(u)))];
+  if (!missing.length) return false;
+  const got = await Promise.all(missing.map(async (uid) => {
+    try {
+      return [uid, await cloud.getProfile(uid)];
+    } catch {
+      return [uid, null];
+    }
+  }));
+  got.forEach(([uid, profile]) => profileCache.set(uid, profile));
+  return true;
+}
+
 // ボタンを押した感触。Androidは振動し、iPhoneはWebに振動の仕組みがないため
 // 押し込むような動き（CSSの is-pop）で代える。
 //
@@ -1466,7 +1498,7 @@ function commentIcon() {
   </svg>`;
 }
 
-function postCard(post) {
+function postCard(post, { withLastComment = true } = {}) {
   const photo = post.photo
     ? `<div class="post-photo"><img src="${post.photo}" alt="" loading="lazy"></div>`
     : '';
@@ -1475,8 +1507,8 @@ function postCard(post) {
     <li class="post">
       <div class="post-head">
         <a class="post-user" href="#/user/${post.uid}">
-          ${avatarChip(post.nickname, post.avatar)}
-          <span class="post-who">${esc(post.nickname || '名無し')}</span>
+          ${avatarFor(post.uid, post.nickname, post.avatar)}
+          <span class="post-who">${esc(nameFor(post.uid, post.nickname))}</span>
         </a>
         <span class="post-when">${esc(whenText(post.createdAt))}</span>
       </div>
@@ -1498,11 +1530,11 @@ function postCard(post) {
           ? `<a class="post-link map-link" href="${mapUrl(post.shopName, post.shopAddress)}" target="_blank" rel="noopener">地図</a>`
           : ''}
       </div>
-      ${post.lastComment
+      ${withLastComment && post.lastComment
         ? `<a class="post-lastcomment" href="#/post/${post.id}">
-             ${avatarChip(post.lastComment.nickname, post.lastComment.avatar)}
+             ${avatarFor(post.lastComment.uid, post.lastComment.nickname, post.lastComment.avatar)}
              <span class="plc-body">
-               <span class="plc-who">${esc(post.lastComment.nickname || '名無し')}</span>
+               <span class="plc-who">${esc(nameFor(post.lastComment.uid, post.lastComment.nickname))}</span>
                <span class="plc-text">${esc(post.lastComment.text)}</span>
              </span>
              ${post.commentCount > 1 ? `<span class="plc-more">他${post.commentCount - 1}件</span>` : ''}
@@ -1528,13 +1560,21 @@ async function renderFeed() {
   app.innerHTML = header('みんなの記録') + '<ul class="post-list" id="feed"><li class="empty">読み込んでいます…</li></ul>';
   const list = $('#feed');
 
+  function drawFeed(posts) {
+    if (!document.body.contains(list)) return; // もう別の画面に移っている
+    list.innerHTML = posts.length
+      ? posts.map((post) => postCard(post)).join('')
+      : '<li class="empty">まだ誰も共有していません。記録の編集画面から共有できます。</li>';
+    restorePop(list);
+  }
+
   feedStop = cloud.watchFeed(
-    (posts) => {
-      if (!document.body.contains(list)) return; // もう別の画面に移っている
-      list.innerHTML = posts.length
-        ? posts.map(postCard).join('')
-        : '<li class="empty">まだ誰も共有していません。記録の編集画面から共有できます。</li>';
-      restorePop(list);
+    async (posts) => {
+      drawFeed(posts);
+      // 投稿に書かれた名前やアイコンは投稿時点のもの。
+      // 最新のプロフィールが読めたら、もう一度描き直す
+      const uids = posts.flatMap((p) => [p.uid, p.lastComment?.uid]);
+      if (await ensureProfiles(uids)) drawFeed(posts);
     },
     (err) => {
       console.error(err);
@@ -1634,7 +1674,8 @@ async function renderPost({ id }) {
         slot.innerHTML = '<p class="empty">この記録は削除されました。</p>';
         return;
       }
-      slot.innerHTML = `<ul class="post-list">${postCard(post)}</ul>`;
+      // 下にコメント欄があるので、ここでは最新コメントを重ねて出さない
+      slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false })}</ul>`;
       restorePop(slot);
       const btn = slot.querySelector('[data-guilty]');
       if (btn) {
@@ -1658,12 +1699,17 @@ async function renderPost({ id }) {
     },
   ));
 
+  function drawComments(comments) {
+    if (!document.body.contains(list)) return;
+    list.innerHTML = comments.length ? commentTree(comments) : '<li class="empty">まだコメントはありません。</li>';
+    restorePop(list);
+  }
+
   postStop.push(cloud.watchComments(
     id,
-    (comments) => {
-      if (!document.body.contains(list)) return;
-      list.innerHTML = comments.length ? commentTree(comments) : '<li class="empty">まだコメントはありません。</li>';
-      restorePop(list);
+    async (comments) => {
+      drawComments(comments);
+      if (await ensureProfiles(comments.map((c) => c.uid))) drawComments(comments);
     },
     (err) => {
       console.error(err);
@@ -1765,10 +1811,10 @@ function commentRow(c, isReply = false) {
   const mine = me.user && c.uid === me.user.uid;
   return `
     <li class="comment${isReply ? ' is-reply' : ''}">
-      <a class="comment-user" href="#/user/${c.uid}">${avatarChip(c.nickname, c.avatar)}</a>
+      <a class="comment-user" href="#/user/${c.uid}">${avatarFor(c.uid, c.nickname, c.avatar)}</a>
       <div class="comment-body">
         <span class="comment-head">
-          <a class="comment-who" href="#/user/${c.uid}">${esc(c.nickname || '名無し')}</a>
+          <a class="comment-who" href="#/user/${c.uid}">${esc(nameFor(c.uid, c.nickname))}</a>
           <span class="comment-when">${esc(whenText(c.createdAt))}</span>
         </span>
         <p class="comment-text">${esc(c.text)}</p>
@@ -2372,6 +2418,7 @@ function renderProfileForm(slot, user, profile) {
       if (avatarChange !== undefined) next.avatar = avatarChange; // null なら外す
       await cloud.saveProfile(user.uid, next);
       me.profile = { ...me.profile, ...next }; // 右上のアイコンなどにすぐ反映させる
+      profileCache.set(user.uid, me.profile);  // 過去の投稿やコメントの表示も新しくする
       toast('プロフィールを保存しました');
       goBack('#/settings');
     } catch (err) {
