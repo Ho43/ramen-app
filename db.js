@@ -9,7 +9,7 @@
 // =====================================================
 
 const DB_NAME = 'ramen-log';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let dbPromise = null;
 
 // データベースを開く（初回だけ保存先を作る）
@@ -28,6 +28,10 @@ function open() {
         }
         if (!db.objectStoreNames.contains('photos')) {
           db.createObjectStore('photos', { keyPath: 'id' });
+        }
+        // ギルチキの育成データ（ポイント・持っている衣装など）。中身は1件だけ入れて使う
+        if (!db.objectStoreNames.contains('chiki')) {
+          db.createObjectStore('chiki', { keyPath: 'id' });
         }
       };
       req.onsuccess = () => resolve(req.result);

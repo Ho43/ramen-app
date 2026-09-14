@@ -221,37 +221,15 @@ a { color: var(--yolk); }
   50% { opacity: 1; transform: scale(1); }
 }
 
-/* ホームのあいさつ欄 */
-.greet {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin: 20px 0 24px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
+/* 衣装（ガチャで手に入るもの）。頭やからだの位置に重ねる */
+.chiki-costume {
+  position: absolute;
+  z-index: 3;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+  pointer-events: none;
 }
 
-.greet .chiki {
-  width: 80px;
-  height: 80px;
-}
-
-.greet-talk {
-  min-width: 0;
-  margin: 0;
-  font-size: 15px;
-  line-height: 1.55;
-}
-
-.greet-talk small {
-  display: block;
-  margin-top: 4px;
-  font-size: 13px;
-  color: var(--muted);
-}
-
+/* ホームのあいさつ欄（新しい定義は下のガチャの節の近くにまとめてある） */
 /* ---------- ホーム ---------- */
 .app-title {
   margin: 28px 0 2px;
@@ -949,10 +927,16 @@ textarea { resize: vertical; }
 .post-photo {
   width: 92px;
   height: 92px;
+  padding: 0;
+  border: none;
   overflow: hidden;
   border-radius: 8px;
   background: var(--surface-2);
+  cursor: zoom-in;
+  transition: transform 0.1s;
 }
+
+.post-photo:active { transform: scale(0.96); }
 
 .post-photo img {
   display: block;
@@ -1198,6 +1182,14 @@ textarea { resize: vertical; }
   to { transform: translateX(0); opacity: 1; }
 }
 
+/* ホームから下スワイプで、みんなの記録が上から滑り込んでくる */
+.page-drop-in { animation: page-drop-in 0.26s cubic-bezier(0.22, 0.9, 0.3, 1); }
+
+@keyframes page-drop-in {
+  from { transform: translateY(-28%); opacity: 0.4; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
 /* ---------- ボタンを押した感触 ---------- */
 .is-pop { animation: pop 0.24s cubic-bezier(0.2, 1.6, 0.4, 1); }
 
@@ -1263,6 +1255,197 @@ textarea { resize: vertical; }
 @keyframes slide-down {
   from { transform: translateY(-8px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
+}
+
+/* ---------- ホームのあいさつ欄（ボタン化） ---------- */
+.greet {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  margin: 20px 0 24px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.greet:active { transform: scale(0.99); }
+
+.greet .chiki {
+  width: 80px;
+  height: 80px;
+}
+
+.greet-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 6px;
+}
+
+.greet-talk {
+  min-width: 0;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.greet-talk small {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.greet-feed {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--yolk);
+  color: #3A2405;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.greet-feed.is-done {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* ---------- ガチャ ---------- */
+.gacha-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin: 12px 0 18px;
+  text-align: center;
+}
+
+.gacha-mascot {
+  width: 108px;
+  height: 108px;
+  margin-bottom: 4px;
+}
+
+.gacha-points {
+  margin: 0;
+  font-family: var(--mincho);
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--yolk);
+}
+
+.gacha-points small {
+  margin-left: 4px;
+  font-family: var(--sans);
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.cos-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cos-item {
+  position: relative;
+  padding: 12px 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: center;
+  cursor: pointer;
+}
+
+.cos-thumb {
+  display: grid;
+  place-items: center;
+  height: 52px;
+  margin-bottom: 6px;
+}
+
+.cos-thumb-none {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cos-item.is-locked {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.cos-question {
+  font-family: var(--mincho);
+  font-size: 26px;
+  color: var(--muted);
+}
+
+.cos-item.is-equipped { border-color: var(--yolk); }
+
+.cos-name {
+  display: block;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cos-rarity {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--yolk);
+}
+
+.cos-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--yolk);
+  color: #3A2405;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* ガチャの結果表示 */
+.gacha-result {
+  text-align: center;
+}
+
+.gr-rarity {
+  margin: 0 0 8px;
+  color: var(--yolk);
+  font-size: 15px;
+}
+
+.gr-thumb {
+  display: grid;
+  place-items: center;
+  height: 90px;
+  margin: 0 auto 8px;
+}
+
+.gr-name {
+  margin: 0 0 10px;
+  font-family: var(--mincho);
+  font-size: 20px;
+  font-weight: 700;
 }
 
 /* ---------- 未読の件数 ---------- */
@@ -1373,16 +1556,6 @@ textarea { resize: vertical; }
   -webkit-user-select: none;
   user-select: none;
 }
-
-/* 拡大できる写真は、押すと少しへこむ */
-.post-photo.is-zoomable {
-  padding: 0;
-  border: none;
-  cursor: zoom-in;
-  transition: transform 0.1s;
-}
-
-.post-photo.is-zoomable:active { transform: scale(0.96); }
 
 .draft-note {
   display: flex;

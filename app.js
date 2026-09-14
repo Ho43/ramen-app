@@ -70,6 +70,7 @@ function parentOf(path) {
   if (path.startsWith('/user/')) return '#/feed';
   if (path.startsWith('/shop/')) return '#/zukan';
   if (path === '/account') return '#/settings';
+  if (path === '/gacha') return '#/';
   return '#/';
 }
 
@@ -185,6 +186,81 @@ function enableSwipeBack(target) {
       }, 200);
     } else {
       place(0, true); // 足りなければ元に戻す
+    }
+  }
+
+  target.addEventListener('touchend', end);
+  target.addEventListener('touchcancel', end);
+}
+
+// ホームだけで使う、下スワイプでみんなの記録へ行く動き。
+// ログインしていない人には見せる場所がないので、何もしない。
+// ページの一番上から下へ引っぱったときだけ反応し、下方向のスクロールとはぶつからない。
+function enableHomeSwipeDown(target) {
+  const NEED = 90;
+  const SLOPE = 1.3;
+  let startX = 0;
+  let startY = 0;
+  let dy = 0;
+  let tracking = false;
+  let vertical = false;
+  let busy = false;
+
+  function place(offset, animate) {
+    target.style.transition = animate ? 'transform 0.24s cubic-bezier(0.22, 0.9, 0.3, 1)' : 'none';
+    target.style.transform = offset ? `translateY(${offset}px)` : '';
+  }
+
+  target.addEventListener('touchstart', (event) => {
+    const atTop = (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
+    if (busy || event.touches.length !== 1 || currentPath() !== '/' || !me.user || !atTop) {
+      tracking = false;
+      return;
+    }
+    const t = event.touches[0];
+    tracking = true;
+    vertical = false;
+    startX = t.clientX;
+    startY = t.clientY;
+    dy = 0;
+  }, { passive: true });
+
+  target.addEventListener('touchmove', (event) => {
+    if (!tracking) return;
+    const t = event.touches[0];
+    const mx = t.clientX - startX;
+    const my = t.clientY - startY;
+
+    if (!vertical) {
+      if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+      if (my <= 0 || Math.abs(my) < Math.abs(mx) * SLOPE) { tracking = false; return; }
+      vertical = true;
+      document.body.classList.add('swiping-back');
+    }
+
+    dy = my;
+    event.preventDefault(); // ページ全体が引っぱられて動くのを止める
+    place(dy, false);
+  }, { passive: false });
+
+  function end() {
+    if (!tracking) return;
+    const wasVertical = vertical;
+    tracking = false;
+    vertical = false;
+    document.body.classList.remove('swiping-back');
+    if (!wasVertical) return;
+
+    if (dy > NEED) {
+      busy = true;
+      place(window.innerHeight, true); // 指の動きの続きとして、画面の下まで流す
+      setTimeout(() => {
+        busy = false;
+        swipedDown = true;
+        location.hash = '#/feed';
+      }, 200);
+    } else {
+      place(0, true);
     }
   }
 
@@ -579,13 +655,115 @@ const TIER_TALK = [
 
 const pick = (list) => list[Math.floor(Math.random() * list.length)];
 
+/* ===================== ギルチキの衣装（ガチャ） =====================
+   端末の中だけのお楽しみ要素。ポイントも衣装も、この端末にしか残らない
+   （Firebaseには送らない）。db.js の 'chiki' に1件だけ保存する。 */
+
+// 位置は giruchiki.png（横向き、頭が左上）の実際の見た目に合わせた目分量。
+// .chiki は正方形の枠で、画像は object-fit: contain で収まっている。
+const COSTUMES = [
+  { id: 'beret', name: 'ベレー帽', rarity: 1, vbW: 54, vbH: 20,
+    svg: '<ellipse cx="27" cy="12" rx="20" ry="8" fill="#C0392B"/><circle cx="27" cy="4" r="3" fill="#8A2419"/>',
+    left: 12, top: 1 },
+  { id: 'ribbon', name: '首もとのリボン', rarity: 1, vbW: 22, vbH: 14,
+    svg: '<path d="M0 7 L11 0 L11 14 Z" fill="#F2A007"/><path d="M22 7 L11 0 L11 14 Z" fill="#F2A007"/><circle cx="11" cy="7" r="3.4" fill="#C0392B"/>',
+    left: 12, top: 40 },
+  { id: 'sunglasses', name: 'サングラス', rarity: 2, vbW: 36, vbH: 14,
+    svg: '<rect x="0" y="2" width="16" height="11" rx="5.5" fill="#1C1A17"/><rect x="20" y="2" width="16" height="11" rx="5.5" fill="#1C1A17"/><rect x="16" y="6" width="4" height="3" fill="#1C1A17"/>',
+    left: 15, top: 22 },
+  { id: 'scarf', name: 'マフラー', rarity: 2, vbW: 46, vbH: 34,
+    svg: '<path d="M0 4 Q23 -4 46 4 L46 15 Q23 22 0 15 Z" fill="#8FBF4A"/><rect x="6" y="14" width="8" height="20" rx="2" fill="#8FBF4A"/>',
+    left: 8, top: 39 },
+  { id: 'crown', name: '金の王冠', rarity: 3, vbW: 36, vbH: 16,
+    svg: '<path d="M0 16 L0 4 L9 11 L18 0 L27 11 L36 4 L36 16 Z" fill="#F2A007" stroke="#A96D05" stroke-width="1.5" stroke-linejoin="round"/>',
+    left: 15, top: -5 },
+  { id: 'halo', name: '天使の輪', rarity: 3, vbW: 36, vbH: 11,
+    svg: '<ellipse cx="18" cy="6" rx="16" ry="5" fill="none" stroke="#F2A007" stroke-width="3"/>',
+    left: 15, top: -15 },
+];
+
+const costumeById = (id) => COSTUMES.find((c) => c.id === id) ?? null;
+
+let chikiState = { points: 0, lastFed: null, owned: [], equipped: null };
+let chikiReady = false;
+
+async function loadChikiState() {
+  try {
+    const saved = await db.get('chiki', 'me');
+    if (saved) chikiState = { points: 0, lastFed: null, owned: [], equipped: null, ...saved };
+  } catch (err) {
+    console.error(err);
+  }
+  chikiReady = true;
+}
+
+function saveChikiState() {
+  return db.put('chiki', { id: 'me', ...chikiState });
+}
+
+function fedToday() {
+  return chikiState.lastFed === todayStr();
+}
+
+// 餌をあげる。1日1回だけ、ランダムなポイントがもらえる
+async function feedChiki() {
+  if (fedToday()) return null;
+  const amount = 3 + Math.floor(Math.random() * 10); // 3〜12
+  chikiState = { ...chikiState, points: chikiState.points + amount, lastFed: todayStr() };
+  await saveChikiState();
+  return amount;
+}
+
+const GACHA_COST = 15;
+const RARITY_WEIGHT = { 1: 60, 2: 30, 3: 10 };
+
+// ガチャを1回引く。持っている衣装が出たら、代わりにポイントを返す
+async function drawGacha() {
+  if (chikiState.points < GACHA_COST) return null;
+  const total = COSTUMES.reduce((sum, c) => sum + RARITY_WEIGHT[c.rarity], 0);
+  let r = Math.random() * total;
+  let got = COSTUMES[0];
+  for (const c of COSTUMES) {
+    r -= RARITY_WEIGHT[c.rarity];
+    if (r <= 0) { got = c; break; }
+  }
+  const already = chikiState.owned.includes(got.id);
+  const refund = already ? 5 : 0; // ダブりは少しだけポイントが戻る
+  chikiState = {
+    ...chikiState,
+    points: chikiState.points - GACHA_COST + refund,
+    owned: already ? chikiState.owned : [...chikiState.owned, got.id],
+    equipped: chikiState.equipped ?? got.id,
+  };
+  await saveChikiState();
+  return { costume: got, duplicate: already };
+}
+
+async function equipCostume(id) {
+  chikiState = { ...chikiState, equipped: id };
+  await saveChikiState();
+}
+
+// 衣装のSVGを、頭やからだの位置に重ねる。
+// 幅を container の何%にするかと、元の縦横比から、高さも%で計算する
+// （.chiki は正方形なので、幅と高さの%の基準は同じ）
+function costumeOverlay() {
+  const c = costumeById(chikiState.equipped);
+  if (!c) return '';
+  const widthPct = c.vbW / 1.5; // 見た目にちょうどいい大きさに調整した経験値
+  const heightPct = widthPct * (c.vbH / c.vbW);
+  return `<svg class="chiki-costume" viewBox="0 0 ${c.vbW} ${c.vbH}"
+      style="left:${c.left}%; top:${c.top}%; width:${widthPct}%; height:${heightPct}%;"
+      xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${c.svg}</svg>`;
+}
+
 // 絵は1枚だけ。点数による違いは、傾き・跳ね・きらきら・光で表す（見た目はCSS側）
 function mascot(score) {
   const tier = faceTier(score);
   const sparks = tier >= 2
     ? '<i class="spark s1"></i><i class="spark s2"></i><i class="spark s3"></i>'
     : '';
-  return `<span class="chiki chiki-t${tier}"><img src="./giruchiki.png" alt="" draggable="false">${sparks}</span>`;
+  return `<span class="chiki chiki-t${tier}"><img src="./giruchiki.png" alt="" draggable="false">${sparks}${costumeOverlay()}</span>`;
 }
 
 // 指定日から何日連続で記録があるかを数える
@@ -689,10 +867,15 @@ async function renderHome() {
         ${avatarButton()}
       </div>
 
-      <div class="greet">
+      <button type="button" class="greet" id="greet-btn" aria-label="${fedToday() ? '今日はもう餌をあげました' : '餌をあげる'}">
         ${mascot(subject?.score ?? 50)}
-        <p class="greet-talk">${esc(talk)}<small>${esc(talkSub)}</small></p>
-      </div>
+        <span class="greet-body">
+          <span class="greet-talk">${esc(talk)}<small>${esc(talkSub)}</small></span>
+          <span class="greet-feed${fedToday() ? ' is-done' : ''}" id="greet-feed">
+            ${fedToday() ? '今日はもう食べた' : 'タップで餌をあげる'}
+          </span>
+        </span>
+      </button>
 
       <nav class="tickets">
         <a class="ticket ticket-main" href="#/new">
@@ -722,6 +905,24 @@ async function renderHome() {
   const avatar = $('#avatar-btn');
   if (avatar) avatar.onclick = () => openAvatarMenu(avatar);
 
+  // 餌やり。1日1回だけ、押すとポイントがもらえる
+  const greetBtn = $('#greet-btn');
+  greetBtn.onclick = async () => {
+    if (fedToday()) {
+      location.hash = '#/gacha'; // 食べ終わっていたら、そのままガチャへ
+      return;
+    }
+    greetBtn.disabled = true;
+    const amount = await feedChiki();
+    if (amount == null) { greetBtn.disabled = false; return; }
+    tap(greetBtn.querySelector('.chiki')); // 食べた反応
+    $('#greet-feed').textContent = '今日はもう食べた';
+    $('#greet-feed').classList.add('is-done');
+    await new Promise((r) => setTimeout(r, 260));
+    toast(`ギルチキが餌を食べた。+${amount}pt`);
+    greetBtn.disabled = false;
+  };
+
   // 前回見てから増えた共有の数を、あとから静かに出す
   if (me.user) {
     countUnread().then((n) => {
@@ -732,6 +933,118 @@ async function renderHome() {
       $('#feed-ticket')?.classList.add('has-new');
     });
   }
+}
+
+/* ===================== ガチャ（衣装） ===================== */
+
+function rarityStars(rarity) {
+  return '★'.repeat(rarity) + '☆'.repeat(3 - rarity);
+}
+
+function costumeThumb(costume, { locked = false, equipped = false } = {}) {
+  const widthPct = costume.vbW / 1.5;
+  const heightPct = widthPct * (costume.vbH / costume.vbW);
+  return `
+    <li class="cos-item${locked ? ' is-locked' : ''}${equipped ? ' is-equipped' : ''}" data-costume="${costume.id}">
+      <div class="cos-thumb">
+        ${locked
+          ? '<span class="cos-question">？</span>'
+          : `<svg viewBox="0 0 ${costume.vbW} ${costume.vbH}" style="width:${widthPct}%; height:${heightPct}%;"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${costume.svg}</svg>`}
+      </div>
+      <span class="cos-name">${locked ? '？？？' : esc(costume.name)}</span>
+      <span class="cos-rarity">${rarityStars(costume.rarity)}</span>
+      ${equipped ? '<span class="cos-badge">着用中</span>' : ''}
+    </li>`;
+}
+
+async function renderGacha() {
+  await loadChikiState();
+
+  app.innerHTML = header('ギルチキガチャ') + `
+    <div class="gacha-head">
+      <div class="gacha-mascot">${mascot(80)}</div>
+      <p class="gacha-points">${chikiState.points}<small>pt</small></p>
+      <p class="hint">餌をあげるとポイントがもらえる。ホームのギルチキをタップ。</p>
+    </div>
+
+    <button type="button" class="btn btn-primary btn-block" id="gacha-draw" ${chikiState.points < GACHA_COST ? 'disabled' : ''}>
+      ガチャを引く（${GACHA_COST}pt）
+    </button>
+
+    <h2 class="section-title">持っている衣装</h2>
+    <ul class="cos-grid" id="cos-owned"></ul>
+
+    <h2 class="section-title">図鑑</h2>
+    <ul class="cos-grid" id="cos-all"></ul>`;
+
+  function draw() {
+    const noneItem = `
+      <li class="cos-item${!chikiState.equipped ? ' is-equipped' : ''}" data-costume="">
+        <div class="cos-thumb cos-thumb-none">なし</div>
+        <span class="cos-name">なし</span>
+        <span class="cos-rarity">&nbsp;</span>
+        ${!chikiState.equipped ? '<span class="cos-badge">着用中</span>' : ''}
+      </li>`;
+    $('#cos-owned').innerHTML = noneItem + chikiState.owned
+      .map((id) => costumeThumb(costumeById(id), { equipped: chikiState.equipped === id }))
+      .join('');
+    $('#cos-all').innerHTML = COSTUMES
+      .map((c) => chikiState.owned.includes(c.id)
+        ? costumeThumb(c, { equipped: chikiState.equipped === c.id })
+        : costumeThumb(c, { locked: true }))
+      .join('');
+    app.querySelector('.gacha-points').innerHTML = `${chikiState.points}<small>pt</small>`;
+    app.querySelector('.gacha-mascot').innerHTML = mascot(80);
+    $('#gacha-draw').disabled = chikiState.points < GACHA_COST;
+  }
+
+  // #cos-owned はこの画面限りの要素なので、そこに直接付ければ、
+  // 画面を離れたときに古い聞き手が残る心配がない
+  $('#cos-owned').addEventListener('click', (event) => {
+    const item = event.target.closest('[data-costume]');
+    if (!item) return;
+    equipCostume(item.dataset.costume || null).then(draw);
+  });
+
+  $('#gacha-draw').onclick = async () => {
+    const btn = $('#gacha-draw');
+    btn.disabled = true;
+    const result = await drawGacha();
+    if (!result) { draw(); return; }
+    await showGachaResult(result);
+    draw();
+  };
+
+  draw();
+}
+
+// ガチャの結果を大きく見せる演出
+function showGachaResult({ costume, duplicate }) {
+  return new Promise((resolve) => {
+    const host = document.createElement('div');
+    host.className = 'sheet';
+    const widthPct = costume.vbW / 1.2;
+    const heightPct = widthPct * (costume.vbH / costume.vbW);
+    host.innerHTML = `<div class="sheet-box gacha-result">
+      <p class="gr-rarity">${rarityStars(costume.rarity)}</p>
+      <div class="gr-thumb">
+        <svg viewBox="0 0 ${costume.vbW} ${costume.vbH}" style="width:${widthPct}%; height:${heightPct}%;"
+          xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${costume.svg}</svg>
+      </div>
+      <p class="gr-name">${esc(costume.name)}</p>
+      ${duplicate ? '<p class="hint">すでに持っていたので、5pt戻ってきた。</p>' : '<p class="hint">はじめて手に入れた！</p>'}
+      <button type="button" class="btn btn-primary btn-block" data-close>閉じる</button>
+    </div>`;
+    document.body.appendChild(host);
+    navigator.vibrate?.(16);
+    host.addEventListener('click', (event) => {
+      if (event.target.closest('[data-close]') || !event.target.closest('.sheet-box')) {
+        host.remove();
+        resolve();
+      }
+    });
+  });
 }
 
 /* ===================== 図鑑 ===================== */
@@ -1619,18 +1932,17 @@ function commentIcon() {
   </svg>`;
 }
 
-function postCard(post, { withLastComment = true, photoZoom = false } = {}) {
+function postCard(post, { withLastComment = true } = {}) {
+  // 写真は押すと直接拡大表示になる。投稿本文への遷移とは別の操作にするため、
+  // <a class="post-body"> の中にあってもボタンとして扱う（クリックはJS側で止める）。
   const photo = post.photo
-    ? (photoZoom
-      // 詳細画面では、写真を押すと大きく見られる
-      ? `<button type="button" class="post-photo is-zoomable" data-zoom aria-label="写真を拡大">
-           <img src="${post.photo}" alt="">
-         </button>`
-      : `<div class="post-photo"><img src="${post.photo}" alt="" loading="lazy"></div>`)
+    ? `<button type="button" class="post-photo is-zoomable" data-zoom aria-label="写真を拡大">
+         <img src="${post.photo}" alt="" loading="lazy">
+       </button>`
     : '';
   const comment = (post.comment ?? '').trim();
   return `
-    <li class="post">
+    <li class="post" data-post-id="${post.id}">
       <div class="post-head">
         <a class="post-user" href="#/user/${post.uid}">
           ${avatarFor(post.uid, post.nickname, post.avatar)}
@@ -1649,7 +1961,7 @@ function postCard(post, { withLastComment = true, photoZoom = false } = {}) {
       </a>
       <div class="post-foot">
         ${guiltyButton(post)}
-        <a class="icon-btn" href="#/post/${post.id}" aria-label="コメント">
+        <a class="icon-btn" href="#/post/${post.id}?comment=1" aria-label="コメントを書く">
           ${commentIcon()}<span class="ib-count">${post.commentCount ?? 0}</span>
         </a>
         ${post.shopAddress
@@ -1693,7 +2005,7 @@ async function renderFeed() {
     latestPosts = posts;
     if (!document.body.contains(list)) return; // もう別の画面に移っている
     list.innerHTML = posts.length
-      ? posts.map((post) => postCard(post)).join('')
+      ? posts.map(postCard).join('')
       : '<li class="empty">まだ誰も共有していません。記録の編集画面から共有できます。</li>';
     restorePop(list);
   }
@@ -1720,6 +2032,15 @@ async function renderFeed() {
 
   // ギルティボタンは押すたびに書き込むので、一覧全体ではなく押された1つだけ相手にする
   list.onclick = async (event) => {
+    // 写真を押したら、本文への遷移はせず直接拡大表示にする
+    const zoomBtn = event.target.closest('[data-zoom]');
+    if (zoomBtn) {
+      event.preventDefault();
+      const post = latestPosts.find((p) => p.id === zoomBtn.closest('.post')?.dataset.postId);
+      if (post?.photo) openPhoto(post.photo);
+      return;
+    }
+
     const btn = event.target.closest('[data-guilty]');
     if (!btn) return;
     event.preventDefault();
@@ -1883,7 +2204,7 @@ function stopPost() {
   postStop = [];
 }
 
-async function renderPost({ id }) {
+async function renderPost({ id, query }) {
   stopPost();
 
   if (!me.user) {
@@ -1918,6 +2239,15 @@ async function renderPost({ id }) {
   let thisPost = null;
   let theseComments = [];
 
+  // 写真を押したら直接拡大表示にする
+  slot.addEventListener('click', (event) => {
+    const zoomBtn = event.target.closest('[data-zoom]');
+    if (zoomBtn && thisPost?.photo) {
+      event.preventDefault();
+      openPhoto(thisPost.photo);
+    }
+  });
+
   // 長押しで、誰が押したのかを見る
   setupLongPress(slot, '[data-guilty]', () => showGuiltyList(thisPost?.guiltyUids ?? []));
   setupLongPress(list, '[data-comment-guilty]', (btn) => {
@@ -1947,6 +2277,9 @@ async function renderPost({ id }) {
   }
 
   openBtn.onclick = () => (form.hidden ? openForm() : closeForm());
+
+  // コメントアイコンから来たときは、最初から入力欄を開いておく
+  if (query?.get('comment') === '1') openForm();
   $('#comment-cancel').onclick = closeForm;
 
   postStop.push(cloud.watchPost(
@@ -1958,11 +2291,10 @@ async function renderPost({ id }) {
         return;
       }
       thisPost = post;
-      // 下にコメント欄があるので、ここでは最新コメントを重ねて出さない
-      slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false, photoZoom: true })}</ul>`;
+      const mine = me.user.uid === post.uid;
+      slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false })}</ul>`
+        + (mine ? '<button type="button" class="btn btn-danger btn-block" id="post-delete">この投稿を削除</button>' : '');
       restorePop(slot);
-      const zoom = slot.querySelector('[data-zoom]');
-      if (zoom) zoom.onclick = () => openPhoto(post.photo);
       const btn = slot.querySelector('[data-guilty]');
       if (btn) {
         btn.onclick = async () => {
@@ -1975,6 +2307,23 @@ async function renderPost({ id }) {
             console.error(err);
             btn.classList.toggle('is-on', !on);
             toast('うまくいきませんでした');
+          }
+        };
+      }
+      const delBtn = slot.querySelector('#post-delete');
+      if (delBtn) {
+        delBtn.onclick = async () => {
+          if (!confirm('この投稿をみんなの記録から削除しますか？元には戻せません。')) return;
+          delBtn.disabled = true;
+          try {
+            await cloud.deletePost(post.id);
+            await clearLocalPostLink(post.id); // 端末側に記録が残っていれば、共有中の印を外す
+            toast('投稿を削除しました');
+            location.hash = '#/feed';
+          } catch (err) {
+            console.error(err);
+            toast(shareErrorMessage(err));
+            delBtn.disabled = false;
           }
         };
       }
@@ -2355,6 +2704,9 @@ async function renderSettings() {
       <h2 class="section-title">みんなに共有</h2>
       <p>身内で記録を見せ合う機能です。まずログインしてください。</p>
       <a class="btn btn-ghost btn-block" href="#/account">アカウント</a>
+
+      <h2 class="section-title">ギルチキ</h2>
+      <a class="btn btn-ghost btn-block" href="#/gacha">ガチャ・持っている衣装</a>
     </section>`;
 
   navigator.storage?.estimate?.()
@@ -2500,6 +2852,14 @@ function setupShare(record, shopNameText, shopAddressText) {
       btn.disabled = false;
     }
   };
+}
+
+// 投稿を消したとき、端末側に記録が残っていれば「共有中」の印を外す。
+// 記録がすでに無ければ（端末のデータが入れ替わっていた場合など）何もしない
+async function clearLocalPostLink(postId) {
+  const records = await db.getAll('records');
+  const match = records.find((r) => r.postId === postId);
+  if (match) await db.put('records', { ...match, postId: null });
 }
 
 function shareErrorMessage(err) {
@@ -2760,6 +3120,7 @@ const routes = [
   { path: /^\/edit\/([\w-]+)$/, view: renderEdit },
   { path: /^\/settings$/, view: renderSettings },
   { path: /^\/account$/, view: renderAccount },
+  { path: /^\/gacha$/, view: renderGacha },
   { path: /^\/feed$/, view: renderFeed },
   { path: /^\/post\/([\w-]+)$/, view: renderPost },
   { path: /^\/user\/([\w@.-]+)$/, view: renderUser },
@@ -2767,7 +3128,8 @@ const routes = [
 
 // 進んだのか戻ったのかを見分けるため、ホームからの遠さを数えておく
 let lastDepth = 0;
-let swipedBack = false; // スワイプで戻ってきたところかどうか
+let swipedBack = false; // 右スワイプで戻ってきたところかどうか
+let swipedDown = false; // ホームから下スワイプでみんなの記録に来たところかどうか
 
 function depthOf(path) {
   let n = 0;
@@ -2785,8 +3147,13 @@ function playPageIn(back) {
   // スワイプでずらした位置を、動きを付けずに戻す（揺れ戻りを防ぐ）
   app.style.transition = 'none';
   app.style.transform = '';
-  app.classList.remove('page-in', 'page-back', 'page-slide-back');
+  app.classList.remove('page-in', 'page-back', 'page-slide-back', 'page-drop-in');
   void app.offsetWidth; // 作り直して毎回動かす
+  if (swipedDown) {
+    swipedDown = false;
+    app.classList.add('page-drop-in'); // ホームから下スワイプで来たとき、上から滑り込む
+    return;
+  }
   if (swipedBack) {
     swipedBack = false;
     app.classList.add('page-slide-back'); // 上の画面が左から入ってくる
@@ -2829,6 +3196,12 @@ app.addEventListener('click', (event) => {
 });
 
 enableSwipeBack(app); // 右スワイプでひとつ上の画面に戻れるようにする（登録は1回だけ）
+enableHomeSwipeDown(app); // ホームでは下スワイプでみんなの記録へ行けるようにする（登録は1回だけ）
+
+loadChikiState().then(() => {
+  // ホームを開いた状態で読み込みが終わったら、餌やりボタンの見た目を合わせる
+  if ((location.hash.slice(1) || '/').split('?')[0] === '/') router();
+});
 
 window.addEventListener('hashchange', router);
 router();
