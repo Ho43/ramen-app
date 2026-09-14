@@ -145,13 +145,27 @@ export async function addComment(postId, comment) {
     guiltyUids: [],
     createdAt: serverTimestamp(),
   });
-  // 一覧で件数を出すため、投稿側の数も1つ増やす
-  await updateDoc(doc(db, 'posts', postId), { commentCount: increment(1) });
+  // 一覧に件数と最新のコメントを出すため、投稿側にも書いておく。
+  // 一覧を開くたびにコメントを読みに行かなくて済む。
+  await updateDoc(doc(db, 'posts', postId), {
+    commentCount: increment(1),
+    lastComment: { nickname: comment.nickname, text: comment.text },
+  });
 }
 
 export async function deleteComment(postId, commentId) {
   await deleteDoc(doc(db, 'posts', postId, 'comments', commentId));
-  await updateDoc(doc(db, 'posts', postId), { commentCount: increment(-1) });
+  // 消したのが最新の1件だったときのために、残っている中の最新を入れ直す
+  const rest = await getDocs(query(
+    collection(db, 'posts', postId, 'comments'),
+    orderBy('createdAt', 'desc'),
+    limit(1),
+  ));
+  const newest = rest.docs[0]?.data();
+  await updateDoc(doc(db, 'posts', postId), {
+    commentCount: increment(-1),
+    lastComment: newest ? { nickname: newest.nickname, text: newest.text } : null,
+  });
 }
 
 // コメントにもギルティを付けられるようにする

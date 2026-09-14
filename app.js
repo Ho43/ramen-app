@@ -62,21 +62,35 @@ function goBack(fallback = '#/') {
   else location.hash = fallback;
 }
 
-// 画面の左端から右へスワイプすると戻る。
-// 端から始まった横方向の動きだけを拾い、縦スクロールは邪魔しない。
+// 右へスワイプすると前の画面に戻る。
+// 画面のどこから始めても反応するが、次の場所では何もしない：
+//   ・ホーム（これ以上戻るとアプリの外に出てしまう）
+//   ・カレンダーの月送り、写真の切り抜き、スライダー（横の動きを自分で使うため）
 // 登録は起動時に1回だけ（画面ごとに付けると戻りすぎてしまう）。
 function enableSwipeBack(target) {
-  const EDGE = 40;     // 反応する左端の幅（ピクセル）
-  const NEED = 70;     // 戻るのに必要な移動量
+  const NEED = 80;     // 戻るのに必要な移動量
+  const SLOPE = 1.4;   // 縦より横に、これだけはっきり動いていること
   let startX = 0;
   let startY = 0;
   let tracking = false;
   let horizontal = false;
 
+  // 横の動きを自分で使っている場所から始まったかどうか
+  function inBusyArea(node) {
+    return Boolean(node?.closest?.('.cal-stage, .cropper, input[type="range"], .zukan'));
+  }
+
+  function atHome() {
+    return (location.hash.slice(1) || '/').split('?')[0] === '/';
+  }
+
   target.addEventListener('touchstart', (event) => {
-    if (event.touches.length !== 1) return;
+    if (event.touches.length !== 1 || atHome() || inBusyArea(event.target)) {
+      tracking = false;
+      return;
+    }
     const t = event.touches[0];
-    tracking = t.clientX <= EDGE;
+    tracking = true;
     horizontal = false;
     startX = t.clientX;
     startY = t.clientY;
@@ -87,15 +101,17 @@ function enableSwipeBack(target) {
     const t = event.touches[0];
     const dx = t.clientX - startX;
     const dy = t.clientY - startY;
+
     if (!horizontal) {
-      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
-      if (Math.abs(dy) > Math.abs(dx) || dx < 0) { tracking = false; return; }
+      if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+      // 右向きで、縦よりはっきり横に動いたときだけスワイプとみなす
+      if (dx <= 0 || Math.abs(dx) < Math.abs(dy) * SLOPE) { tracking = false; return; }
       horizontal = true;
       document.body.classList.add('swiping-back');
     }
-    // 指の動きに合わせて画面を少しずらし、戻れることを伝える
-    target.style.transform = `translateX(${Math.min(dx, 120)}px)`;
-    target.style.opacity = String(Math.max(0.5, 1 - dx / 400));
+    // 指の動きに合わせて画面をずらし、戻れることを伝える
+    target.style.transform = `translateX(${Math.min(dx, 140)}px)`;
+    target.style.opacity = String(Math.max(0.45, 1 - dx / 420));
   }, { passive: true });
 
   function end(event) {
@@ -109,9 +125,6 @@ function enableSwipeBack(target) {
     target.style.opacity = '';
     setTimeout(() => { target.style.transition = ''; }, 220);
     if (!wasHorizontal) return;
-    // ホームからさらに戻るとアプリの外に出てしまうので、ここでは何もしない
-    const path = (location.hash.slice(1) || '/').split('?')[0];
-    if (path === '/') return;
     const dx = (event.changedTouches?.[0]?.clientX ?? startX) - startX;
     if (dx >= NEED) goBack();
   }
@@ -1364,6 +1377,30 @@ function avatarChip(nickname, avatar) {
     : `<span class="chip-avatar is-letter">${esc(name.slice(0, 1))}</span>`;
 }
 
+// ボタンを押した感触。Androidは振動し、iPhoneはWebに振動の仕組みがないため
+// 押し込むような動き（CSSの is-pop）で代える。
+//
+// ギルティを押すと一覧が描き直されてボタンが作り直されるので、
+// 直前に押したものを覚えておき、描き直したあとにも動きを付け直す。
+let popKey = null;
+
+function tap(el, key = null) {
+  navigator.vibrate?.(12);
+  popKey = key;
+  if (key) setTimeout(() => { if (popKey === key) popKey = null; }, 500);
+  if (!el) return;
+  el.classList.remove('is-pop');
+  void el.offsetWidth; // 連打でも毎回動かすための作り直し
+  el.classList.add('is-pop');
+}
+
+// 描き直した直後に、さっき押したボタンの動きを付け直す
+function restorePop(root) {
+  if (!popKey) return;
+  const btn = root.querySelector(`[data-guilty="${popKey}"], [data-comment-guilty="${popKey}"]`);
+  if (btn) btn.classList.add('is-pop');
+}
+
 function guiltyButton(post) {
   const uids = post.guiltyUids ?? [];
   const on = me.user ? uids.includes(me.user.uid) : false;
@@ -1412,6 +1449,13 @@ function postCard(post) {
           ? `<a class="post-link map-link" href="${mapUrl(post.shopName, post.shopAddress)}" target="_blank" rel="noopener">地図</a>`
           : ''}
       </div>
+      ${post.lastComment
+        ? `<a class="post-lastcomment" href="#/post/${post.id}">
+             <span class="plc-who">${esc(post.lastComment.nickname || '名無し')}</span>
+             <span class="plc-text">${esc(post.lastComment.text)}</span>
+             ${post.commentCount > 1 ? `<span class="plc-more">他${post.commentCount - 1}件</span>` : ''}
+           </a>`
+        : ''}
     </li>`;
 }
 
@@ -1438,6 +1482,7 @@ async function renderFeed() {
       list.innerHTML = posts.length
         ? posts.map(postCard).join('')
         : '<li class="empty">まだ誰も共有していません。記録の編集画面から共有できます。</li>';
+      restorePop(list);
     },
     (err) => {
       console.error(err);
@@ -1452,6 +1497,7 @@ async function renderFeed() {
     event.preventDefault();
     const on = !btn.classList.contains('is-on');
     btn.classList.toggle('is-on', on); // 通信を待たずに見た目を変える
+    tap(btn, btn.dataset.guilty);
     try {
       await cloud.toggleGuilty(btn.dataset.guilty, me.user.uid, on);
     } catch (err) {
@@ -1512,6 +1558,9 @@ async function renderPost({ id }) {
   function openForm() {
     form.hidden = false;
     openBtn.setAttribute('aria-expanded', 'true');
+    form.classList.remove('is-opening');
+    void form.offsetWidth;
+    form.classList.add('is-opening'); // すっと開く動き
     box.focus();
   }
   function closeForm() {
@@ -1534,11 +1583,13 @@ async function renderPost({ id }) {
         return;
       }
       slot.innerHTML = `<ul class="post-list">${postCard(post)}</ul>`;
+      restorePop(slot);
       const btn = slot.querySelector('[data-guilty]');
       if (btn) {
         btn.onclick = async () => {
           const on = !btn.classList.contains('is-on');
           btn.classList.toggle('is-on', on);
+          tap(btn, post.id);
           try {
             await cloud.toggleGuilty(post.id, me.user.uid, on);
           } catch (err) {
@@ -1560,6 +1611,7 @@ async function renderPost({ id }) {
     (comments) => {
       if (!document.body.contains(list)) return;
       list.innerHTML = comments.length ? commentTree(comments) : '<li class="empty">まだコメントはありません。</li>';
+      restorePop(list);
     },
     (err) => {
       console.error(err);
@@ -1582,6 +1634,7 @@ async function renderPost({ id }) {
     if (gBtn) {
       const on = !gBtn.classList.contains('is-on');
       gBtn.classList.toggle('is-on', on);
+      tap(gBtn, gBtn.dataset.commentGuilty);
       try {
         await cloud.toggleCommentGuilty(id, gBtn.dataset.commentGuilty, me.user.uid, on);
       } catch (err) {
@@ -2297,6 +2350,23 @@ const routes = [
   { path: /^\/user\/([\w@.-]+)$/, view: renderUser },
 ];
 
+// 進んだのか戻ったのかを見分けるため、画面の並び順を覚えておく
+const PAGE_ORDER = ['/', '/feed', '/post/', '/user/', '/zukan', '/calendar', '/shop/', '/new', '/edit/', '/settings', '/account'];
+let lastDepth = 0;
+
+function depthOf(path) {
+  if (path === '/') return 0;
+  if (path === '/feed') return 1;
+  return 2;
+}
+
+// 画面を切り替えるときに軽く滑らせる
+function playPageIn(back) {
+  app.classList.remove('page-in', 'page-back');
+  void app.offsetWidth; // 作り直して毎回動かす
+  app.classList.add(back ? 'page-back' : 'page-in');
+}
+
 async function router() {
   // 前の画面がFirebaseを見張ったままにならないよう、毎回止めてから進む
   stopFeed();
@@ -2316,6 +2386,9 @@ async function router() {
         <p class="empty">データを読み込めませんでした。アプリを開き直してください。<br>
         <small>${esc(err.message)}</small></p>`;
     }
+    const depth = depthOf(path);
+    playPageIn(depth < lastDepth);
+    lastDepth = depth;
     window.scrollTo(0, 0);
     return;
   }

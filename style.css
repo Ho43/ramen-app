@@ -1126,6 +1126,72 @@ textarea { resize: vertical; }
 
 .post-foot .map-link { margin-left: 0; }
 
+/* ---------- 画面の切り替え ---------- */
+.page-in { animation: page-in 0.22s ease-out; }
+.page-back { animation: page-back 0.22s ease-out; }
+
+@keyframes page-in {
+  from { transform: translateX(22px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes page-back {
+  from { transform: translateX(-22px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* ---------- ボタンを押した感触 ---------- */
+.is-pop { animation: pop 0.24s cubic-bezier(0.2, 1.6, 0.4, 1); }
+
+@keyframes pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.88); }
+  100% { transform: scale(1); }
+}
+
+/* ---------- 一覧に出す最新のコメント ---------- */
+.post-lastcomment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0 12px 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: inherit;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.plc-who {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--cream);
+}
+
+.plc-text {
+  min-width: 0;
+  overflow: hidden;
+  color: #C9C1B2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.plc-more {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+/* コメント欄が開くときの動き */
+.comment-form.is-opening { animation: slide-down 0.22s ease-out; }
+
+@keyframes slide-down {
+  from { transform: translateY(-8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
 /* ---------- コメントまわり ---------- */
 .icon-btn {
   display: inline-flex;
