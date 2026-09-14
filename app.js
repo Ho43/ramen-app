@@ -62,6 +62,64 @@ function goBack(fallback = '#/') {
   else location.hash = fallback;
 }
 
+// 画面の左端から右へスワイプすると戻る。
+// 端から始まった横方向の動きだけを拾い、縦スクロールは邪魔しない。
+// 登録は起動時に1回だけ（画面ごとに付けると戻りすぎてしまう）。
+function enableSwipeBack(target) {
+  const EDGE = 40;     // 反応する左端の幅（ピクセル）
+  const NEED = 70;     // 戻るのに必要な移動量
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+  let horizontal = false;
+
+  target.addEventListener('touchstart', (event) => {
+    if (event.touches.length !== 1) return;
+    const t = event.touches[0];
+    tracking = t.clientX <= EDGE;
+    horizontal = false;
+    startX = t.clientX;
+    startY = t.clientY;
+  }, { passive: true });
+
+  target.addEventListener('touchmove', (event) => {
+    if (!tracking) return;
+    const t = event.touches[0];
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+    if (!horizontal) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dy) > Math.abs(dx) || dx < 0) { tracking = false; return; }
+      horizontal = true;
+      document.body.classList.add('swiping-back');
+    }
+    // 指の動きに合わせて画面を少しずらし、戻れることを伝える
+    target.style.transform = `translateX(${Math.min(dx, 120)}px)`;
+    target.style.opacity = String(Math.max(0.5, 1 - dx / 400));
+  }, { passive: true });
+
+  function end(event) {
+    if (!tracking) return;
+    const wasHorizontal = horizontal;
+    tracking = false;
+    horizontal = false;
+    document.body.classList.remove('swiping-back');
+    target.style.transition = 'transform 0.2s ease-out, opacity 0.2s ease-out';
+    target.style.transform = '';
+    target.style.opacity = '';
+    setTimeout(() => { target.style.transition = ''; }, 220);
+    if (!wasHorizontal) return;
+    // ホームからさらに戻るとアプリの外に出てしまうので、ここでは何もしない
+    const path = (location.hash.slice(1) || '/').split('?')[0];
+    if (path === '/') return;
+    const dx = (event.changedTouches?.[0]?.clientX ?? startX) - startX;
+    if (dx >= NEED) goBack();
+  }
+
+  target.addEventListener('touchend', end);
+  target.addEventListener('touchcancel', end);
+}
+
 // 記録の並び順：古い順（同じ日なら先に記録したほうが先）
 const byOldest = (a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt;
 const byNewest = (a, b) => byOldest(b, a);
@@ -801,7 +859,7 @@ function setupSwipe(stage, track, onCommit) {
 }
 
 // 1か月分のマス目を組み立てる
-function monthCells(y, m, byDate, shopMap, today, selected) {
+function monthCells(y, m, byDate, labelOf, today, selected) {
   const prefix = `${y}-${pad2(m + 1)}`;
   const firstDow = new Date(y, m, 1).getDay();
   const daysInMonth = new Date(y, m + 1, 0).getDate();
@@ -821,7 +879,7 @@ function monthCells(y, m, byDate, shopMap, today, selected) {
       <button type="button" class="${classes.join(' ')}" data-date="${date}"
         aria-label="${m + 1}月${d}日 ${list.length}杯" aria-pressed="${date === selected}">
         <span class="cal-day">${d}</span>
-        ${list.slice(0, 2).map((r) => `<span class="cal-item">${esc(shopName(shopMap, r.shopId))}</span>`).join('')}
+        ${list.slice(0, 2).map((r) => `<span class="cal-item">${esc(labelOf(r))}</span>`).join('')}
         ${list.length > 2 ? `<span class="cal-more">+${list.length - 2}</span>` : ''}
       </button>`;
   }
@@ -851,7 +909,7 @@ async function renderCalendar() {
   // 前月・当月・翌月を並べて置く
   const panes = [-1, 0, 1].map((offset) => {
     const d = new Date(y, m + offset, 1);
-    return `<div class="cal-pane">${monthCells(d.getFullYear(), d.getMonth(), byDate, shopMap, today, cal.selected)}</div>`;
+    return `<div class="cal-pane">${monthCells(d.getFullYear(), d.getMonth(), byDate, (r) => shopName(shopMap, r.shopId), today, cal.selected)}</div>`;
   }).join('');
 
   app.innerHTML = header('カレンダー') + `
@@ -1315,6 +1373,13 @@ function guiltyButton(post) {
   </button>`;
 }
 
+// 吹き出しのアイコン（コメント）
+function commentIcon() {
+  return `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+    <path d="M3 4.5h14v9H8.5L4.5 17v-3.5H3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+  </svg>`;
+}
+
 function postCard(post) {
   const photo = post.photo
     ? `<div class="post-photo"><img src="${post.photo}" alt="" loading="lazy"></div>`
@@ -1323,8 +1388,10 @@ function postCard(post) {
   return `
     <li class="post">
       <div class="post-head">
-        ${avatarChip(post.nickname, post.avatar)}
-        <span class="post-who">${esc(post.nickname || '名無し')}</span>
+        <a class="post-user" href="#/user/${post.uid}">
+          ${avatarChip(post.nickname, post.avatar)}
+          <span class="post-who">${esc(post.nickname || '名無し')}</span>
+        </a>
         <span class="post-when">${esc(whenText(post.createdAt))}</span>
       </div>
       <a class="post-body" href="#/post/${post.id}">
@@ -1338,7 +1405,9 @@ function postCard(post) {
       </a>
       <div class="post-foot">
         ${guiltyButton(post)}
-        <a class="post-link" href="#/post/${post.id}">コメント</a>
+        <a class="icon-btn" href="#/post/${post.id}" aria-label="コメント">
+          ${commentIcon()}<span class="ib-count">${post.commentCount ?? 0}</span>
+        </a>
         ${post.shopAddress
           ? `<a class="post-link map-link" href="${mapUrl(post.shopName, post.shopAddress)}" target="_blank" rel="noopener">地図</a>`
           : ''}
@@ -1412,15 +1481,49 @@ async function renderPost({ id }) {
 
   app.innerHTML = header('記録', { back: '#/feed', backLabel: 'みんなの記録' }) + `
     <div id="post-slot"><p class="empty">読み込んでいます…</p></div>
-    <h2 class="section-title">コメント</h2>
-    <ul class="comment-list" id="comment-list"><li class="empty">読み込んでいます…</li></ul>
-    <form class="comment-form" id="comment-form">
+
+    <div class="comment-open">
+      <button type="button" class="icon-btn is-big" id="comment-open" aria-expanded="false">
+        ${commentIcon()}<span>コメントを書く</span>
+      </button>
+    </div>
+
+    <form class="comment-form" id="comment-form" hidden>
       <textarea id="comment-text" rows="2" maxlength="200" placeholder="コメントを書く"></textarea>
-      <button type="submit" class="btn btn-primary" id="comment-send">送信</button>
-    </form>`;
+      <div class="comment-form-foot">
+        <span class="hint" id="reply-to"></span>
+        <button type="button" class="btn btn-ghost" id="comment-cancel">やめる</button>
+        <button type="submit" class="btn btn-primary" id="comment-send">送信</button>
+      </div>
+    </form>
+
+    <h2 class="section-title">コメント</h2>
+    <ul class="comment-list" id="comment-list"><li class="empty">読み込んでいます…</li></ul>`;
 
   const slot = $('#post-slot');
   const list = $('#comment-list');
+  const form = $('#comment-form');
+  const openBtn = $('#comment-open');
+  const box = $('#comment-text');
+  const replyLabel = $('#reply-to');
+
+  let replyTo = null; // 返信先のコメント（なければ通常のコメント）
+
+  function openForm() {
+    form.hidden = false;
+    openBtn.setAttribute('aria-expanded', 'true');
+    box.focus();
+  }
+  function closeForm() {
+    form.hidden = true;
+    openBtn.setAttribute('aria-expanded', 'false');
+    replyTo = null;
+    replyLabel.textContent = '';
+    box.value = '';
+  }
+
+  openBtn.onclick = () => (form.hidden ? openForm() : closeForm());
+  $('#comment-cancel').onclick = closeForm;
 
   postStop.push(cloud.watchPost(
     id,
@@ -1456,9 +1559,7 @@ async function renderPost({ id }) {
     id,
     (comments) => {
       if (!document.body.contains(list)) return;
-      list.innerHTML = comments.length
-        ? comments.map(commentRow).join('')
-        : '<li class="empty">まだコメントはありません。</li>';
+      list.innerHTML = comments.length ? commentTree(comments) : '<li class="empty">まだコメントはありません。</li>';
     },
     (err) => {
       console.error(err);
@@ -1466,22 +1567,46 @@ async function renderPost({ id }) {
     },
   ));
 
-  // 自分のコメントだけ消せる
   list.onclick = async (event) => {
-    const btn = event.target.closest('[data-del-comment]');
-    if (!btn) return;
-    if (!confirm('このコメントを削除しますか？')) return;
-    try {
-      await cloud.deleteComment(id, btn.dataset.delComment);
-    } catch (err) {
-      console.error(err);
-      toast('削除できませんでした');
+    // 返信する
+    const replyBtn = event.target.closest('[data-reply]');
+    if (replyBtn) {
+      replyTo = { id: replyBtn.dataset.reply, nickname: replyBtn.dataset.replyName };
+      replyLabel.textContent = `${replyTo.nickname} さんへの返信`;
+      openForm();
+      return;
+    }
+
+    // コメントにギルティ
+    const gBtn = event.target.closest('[data-comment-guilty]');
+    if (gBtn) {
+      const on = !gBtn.classList.contains('is-on');
+      gBtn.classList.toggle('is-on', on);
+      try {
+        await cloud.toggleCommentGuilty(id, gBtn.dataset.commentGuilty, me.user.uid, on);
+      } catch (err) {
+        console.error(err);
+        gBtn.classList.toggle('is-on', !on);
+        toast('うまくいきませんでした');
+      }
+      return;
+    }
+
+    // 自分のコメントを削除
+    const delBtn = event.target.closest('[data-del-comment]');
+    if (delBtn) {
+      if (!confirm('このコメントを削除しますか？')) return;
+      try {
+        await cloud.deleteComment(id, delBtn.dataset.delComment);
+      } catch (err) {
+        console.error(err);
+        toast('削除できませんでした');
+      }
     }
   };
 
-  $('#comment-form').onsubmit = async (event) => {
+  form.onsubmit = async (event) => {
     event.preventDefault();
-    const box = $('#comment-text');
     const text = box.value.trim();
     if (!text) return;
     const sendBtn = $('#comment-send');
@@ -1492,30 +1617,207 @@ async function renderPost({ id }) {
         nickname: myName(),
         avatar: me.profile?.avatar ?? null,
         text,
+        parentId: replyTo?.id ?? null,
       });
-      box.value = '';
+      closeForm();
     } catch (err) {
       console.error(err);
       toast(shareErrorMessage(err));
     }
     sendBtn.disabled = false;
   };
+
 }
 
-function commentRow(c) {
+// コメントを「元のコメント → その返信」の順に組み立てる（返信は1段まで）
+function commentTree(comments) {
+  const parents = comments.filter((c) => !c.parentId);
+  const repliesOf = new Map();
+  for (const c of comments) {
+    if (!c.parentId) continue;
+    if (!repliesOf.has(c.parentId)) repliesOf.set(c.parentId, []);
+    repliesOf.get(c.parentId).push(c);
+  }
+  // 返信先が消えているものは、独立したコメントとして残す
+  const orphans = comments.filter((c) => c.parentId && !comments.some((x) => x.id === c.parentId));
+
+  return [...parents, ...orphans]
+    .map((c) => commentRow(c) + (repliesOf.get(c.id) ?? []).map((r) => commentRow(r, true)).join(''))
+    .join('');
+}
+
+function commentGuiltyButton(c) {
+  const uids = c.guiltyUids ?? [];
+  const on = me.user ? uids.includes(me.user.uid) : false;
+  return `<button type="button" class="mini-guilty${on ? ' is-on' : ''}" data-comment-guilty="${c.id}">
+    ギルティ${uids.length ? ` ${uids.length}` : ''}
+  </button>`;
+}
+
+function commentRow(c, isReply = false) {
   const mine = me.user && c.uid === me.user.uid;
   return `
-    <li class="comment">
-      ${avatarChip(c.nickname, c.avatar)}
+    <li class="comment${isReply ? ' is-reply' : ''}">
+      <a class="comment-user" href="#/user/${c.uid}">${avatarChip(c.nickname, c.avatar)}</a>
       <div class="comment-body">
         <span class="comment-head">
-          <span class="comment-who">${esc(c.nickname || '名無し')}</span>
+          <a class="comment-who" href="#/user/${c.uid}">${esc(c.nickname || '名無し')}</a>
           <span class="comment-when">${esc(whenText(c.createdAt))}</span>
         </span>
         <p class="comment-text">${esc(c.text)}</p>
+        <div class="comment-actions">
+          ${commentGuiltyButton(c)}
+          ${isReply ? '' : `<button type="button" class="mini-btn" data-reply="${c.id}" data-reply-name="${esc(c.nickname || '名無し')}">返信</button>`}
+          ${mine ? `<button type="button" class="mini-btn is-quiet" data-del-comment="${c.id}">削除</button>` : ''}
+        </div>
       </div>
-      ${mine ? `<button type="button" class="comment-del" data-del-comment="${c.id}" aria-label="削除">×</button>` : ''}
     </li>`;
+}
+
+/* ===================== ほかの人のページ ===================== */
+
+// ほかの人の図鑑やカレンダーは、その人が共有した記録から組み立てる。
+// 相手の端末の中身は見られないので、見えるのは共有されたものだけ。
+async function renderUser({ id }) {
+  if (!me.user) {
+    location.replace('#/feed');
+    return;
+  }
+
+  app.innerHTML = header('プロフィール', { back: '#/feed', backLabel: 'みんなの記録' })
+    + '<p class="empty">読み込んでいます…</p>';
+
+  let profile = null;
+  let posts = [];
+  try {
+    [profile, posts] = await Promise.all([cloud.getProfile(id), cloud.getPostsByUser(id)]);
+  } catch (err) {
+    console.error(err);
+    app.innerHTML = header('プロフィール', { back: '#/feed', backLabel: 'みんなの記録' })
+      + `<p class="empty">${esc(shareErrorMessage(err))}</p>`;
+    return;
+  }
+
+  const isMe = id === me.user.uid;
+  const name = profile?.nickname ?? '名無し';
+  const bio = (profile?.bio ?? '').trim();
+  const shopNames = new Set(posts.map((p) => p.shopName));
+  // 公開設定。決めていない人は「見せる」扱いにする
+  const showZukan = profile?.showZukan !== false;
+  const showCalendar = profile?.showCalendar !== false;
+
+  app.innerHTML = header(name, { back: '#/feed', backLabel: 'みんなの記録' }) + `
+    <section class="user">
+      <div class="user-head">
+        <span class="user-avatar">${profile?.avatar
+          ? `<img src="${profile.avatar}" alt="">`
+          : esc(name.slice(0, 1))}</span>
+        <div class="user-lines">
+          <h2 class="user-name">${esc(name)}</h2>
+          ${bio ? `<p class="user-bio">${esc(bio)}</p>` : ''}
+        </div>
+      </div>
+
+      <dl class="shop-stats">
+        <div><dt>共有</dt><dd>${posts.length}<small>杯</small></dd></div>
+        <div><dt>お店</dt><dd>${shopNames.size}<small>店</small></dd></div>
+        <div><dt>最高</dt><dd>${posts.length ? Math.max(...posts.map((p) => p.score)) : '–'}<small>点</small></dd></div>
+      </dl>
+
+      ${isMe ? '<a class="btn btn-ghost btn-block" href="#/account">プロフィールを編集</a>' : ''}
+
+      ${showZukan ? `
+        <h2 class="section-title">図鑑</h2>
+        <div id="user-zukan"></div>` : ''}
+
+      ${showCalendar ? `
+        <h2 class="section-title">カレンダー</h2>
+        <div id="user-cal"></div>` : ''}
+
+      ${!showZukan && !showCalendar
+        ? '<p class="empty">このユーザーは図鑑とカレンダーを公開していません。</p>'
+        : ''}
+    </section>`;
+
+  if (showZukan) renderUserZukan($('#user-zukan'), posts);
+  if (showCalendar) renderUserCalendar($('#user-cal'), posts);
+
+}
+
+// 共有された記録をお店ごとにまとめて図鑑にする
+function renderUserZukan(slot, posts) {
+  if (!posts.length) {
+    slot.innerHTML = '<p class="empty">共有された記録がありません。</p>';
+    return;
+  }
+  const byShop = new Map();
+  // 古い順に見て、最初の1件を「初めて食べた時」として扱う
+  const oldest = [...posts].reverse();
+  for (const p of oldest) {
+    if (!byShop.has(p.shopName)) byShop.set(p.shopName, { first: p, count: 0 });
+    byShop.get(p.shopName).count += 1;
+  }
+
+  slot.innerHTML = `<ul class="zukan">${[...byShop.entries()].map(([shopNameText, v], i) => {
+    const comment = (v.first.comment ?? '').trim();
+    return `
+      <li>
+        <div class="zk-card">
+          <div class="zk-photo">
+            ${v.first.photo ? `<img src="${v.first.photo}" alt="" loading="lazy">` : noImage}
+            <span class="zk-stamp">${v.count}<small>回</small></span>
+          </div>
+          <div class="zk-body">
+            <span class="zk-no">No.${String(i + 1).padStart(3, '0')}</span>
+            <h3 class="zk-name">${esc(shopNameText)}</h3>
+            <p class="zk-comment${comment ? '' : ' is-empty'}">${comment ? esc(comment) : 'コメントがありません'}</p>
+          </div>
+        </div>
+      </li>`;
+  }).join('')}</ul>`;
+}
+
+// 共有された記録からカレンダーを作る（月の移動は矢印のみ）
+function renderUserCalendar(slot, posts) {
+  if (!posts.length) {
+    slot.innerHTML = '<p class="empty">共有された記録がありません。</p>';
+    return;
+  }
+  const today = todayStr();
+  const byDate = new Map();
+  for (const p of [...posts].reverse()) {
+    if (!byDate.has(p.date)) byDate.set(p.date, []);
+    byDate.get(p.date).push(p);
+  }
+
+  const start = new Date();
+  let y = start.getFullYear();
+  let m = start.getMonth();
+
+  function draw() {
+    const prefix = `${y}-${pad2(m + 1)}`;
+    const count = posts.filter((p) => p.date.startsWith(prefix)).length;
+    slot.innerHTML = `
+      <div class="cal-nav">
+        <button type="button" class="cal-arrow" data-uc="-1" aria-label="前の月">‹</button>
+        <h3 class="cal-month">${y}年${m + 1}月<small>${count}杯</small></h3>
+        <button type="button" class="cal-arrow" data-uc="1" aria-label="次の月">›</button>
+      </div>
+      <div class="cal-week" aria-hidden="true">
+        ${[...'日月火水木金土'].map((w, i) => `<span class="dow-${i}">${w}</span>`).join('')}
+      </div>
+      ${monthCells(y, m, byDate, (p) => p.shopName, today, null)}`;
+
+    slot.querySelectorAll('[data-uc]').forEach((btn) => {
+      btn.onclick = () => {
+        const d = new Date(y, m + Number(btn.dataset.uc), 1);
+        y = d.getFullYear();
+        m = d.getMonth();
+        draw();
+      };
+    });
+  }
+  draw();
 }
 
 /* ===================== バックアップ・設定 ===================== */
@@ -1895,6 +2197,19 @@ function renderProfileForm(slot, user, profile) {
         <textarea id="pf-bio" rows="2" maxlength="60" placeholder="よろしくお願いします">${esc(profile?.bio)}</textarea>
       </div>
 
+      <div class="field">
+        <span class="label">公開する情報</span>
+        <p class="hint">みんなの記録であなたのアイコンを押した人に、何を見せるかを決められます。見せるのは共有した記録だけで、端末の中の記録は公開されません。</p>
+        <label class="check-row">
+          <input type="checkbox" id="pf-zukan" ${profile?.showZukan === false ? '' : 'checked'}>
+          <span>図鑑を見せる</span>
+        </label>
+        <label class="check-row">
+          <input type="checkbox" id="pf-calendar" ${profile?.showCalendar === false ? '' : 'checked'}>
+          <span>カレンダーを見せる</span>
+        </label>
+      </div>
+
       <p class="form-error" id="pf-error" role="alert"></p>
       <button type="submit" class="btn btn-primary btn-block" id="pf-submit">保存する</button>
     </form>
@@ -1941,7 +2256,12 @@ function renderProfileForm(slot, user, profile) {
     const submitBtn = $('#pf-submit');
     submitBtn.disabled = true;
     try {
-      const next = { nickname, bio: $('#pf-bio').value.trim() };
+      const next = {
+        nickname,
+        bio: $('#pf-bio').value.trim(),
+        showZukan: $('#pf-zukan').checked,
+        showCalendar: $('#pf-calendar').checked,
+      };
       if (avatarChange !== undefined) next.avatar = avatarChange; // null なら外す
       await cloud.saveProfile(user.uid, next);
       me.profile = { ...me.profile, ...next }; // 右上のアイコンなどにすぐ反映させる
@@ -1974,6 +2294,7 @@ const routes = [
   { path: /^\/account$/, view: renderAccount },
   { path: /^\/feed$/, view: renderFeed },
   { path: /^\/post\/([\w-]+)$/, view: renderPost },
+  { path: /^\/user\/([\w@.-]+)$/, view: renderUser },
 ];
 
 async function router() {
@@ -2005,6 +2326,8 @@ async function router() {
 app.addEventListener('click', (event) => {
   if (event.target.closest('[data-action="back"]')) goBack();
 });
+
+enableSwipeBack(app); // 画面の左端からのスワイプで戻れるようにする（登録は1回だけ）
 
 window.addEventListener('hashchange', router);
 router();

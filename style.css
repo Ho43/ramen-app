@@ -620,6 +620,8 @@ a { color: var(--yolk); }
 /* iPhoneは16px未満だと入力時に画面が拡大されるので16pxにしている */
 input[type="text"],
 input[type="date"],
+input[type="email"],
+input[type="password"],
 select,
 textarea {
   display: block;
@@ -1124,6 +1126,164 @@ textarea { resize: vertical; }
 
 .post-foot .map-link { margin-left: 0; }
 
+/* ---------- コメントまわり ---------- */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.icon-btn.is-big {
+  width: 100%;
+  justify-content: center;
+  min-height: 48px;
+  font-size: 15px;
+}
+
+.ib-count { font-variant-numeric: tabular-nums; }
+
+.comment-open { margin: 16px 0 8px; }
+
+.comment-form-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.comment-form-foot .hint {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.comment-form {
+  display: block;
+  margin-top: 8px;
+}
+
+.comment-form .btn {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 16px;
+}
+
+.comment.is-reply {
+  margin-left: 34px;
+  border-left: 2px solid var(--line);
+  padding-left: 10px;
+}
+
+.comment-user { flex-shrink: 0; }
+.comment-who { color: inherit; text-decoration: none; }
+
+.comment-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.mini-btn {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--yolk);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mini-btn.is-quiet { color: var(--muted); }
+
+.mini-guilty {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font-family: var(--mincho);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mini-guilty.is-on {
+  border-color: var(--shu);
+  background: var(--shu);
+  color: #FFF3EC;
+}
+
+/* ---------- ほかの人のページ ---------- */
+.post-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.user-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 8px 0 16px;
+}
+
+.user-avatar {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  overflow: hidden;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  font-family: var(--mincho);
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-lines { min-width: 0; }
+
+.user-name {
+  margin: 0;
+  font-family: var(--mincho);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.user-bio {
+  margin: 4px 0 0;
+  font-size: 14px;
+  color: #C9C1B2;
+}
+
+/* スワイプで戻っている最中は、文字が選ばれないようにする */
+.swiping-back { user-select: none; -webkit-user-select: none; }
+
 /* ---------- パスワード欄の目のマーク ---------- */
 .pw-row {
   position: relative;
@@ -1132,16 +1292,19 @@ textarea { resize: vertical; }
 }
 
 .pw-row input {
-  padding-right: 52px;
+  width: 100%;
+  padding-right: 54px;
 }
 
 .pw-eye {
   position: absolute;
-  right: 4px;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   border: none;
   border-radius: 8px;
   background: none;

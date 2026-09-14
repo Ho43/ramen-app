@@ -36,6 +36,9 @@ import {
   serverTimestamp,
   arrayUnion,
   arrayRemove,
+  increment,
+  where,
+  getDocs,
 } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js';
 
 const app = initializeApp(firebaseConfig);
@@ -139,10 +142,32 @@ export function watchComments(postId, callback, onError) {
 export async function addComment(postId, comment) {
   await addDoc(collection(db, 'posts', postId, 'comments'), {
     ...comment,
+    guiltyUids: [],
     createdAt: serverTimestamp(),
+  });
+  // 一覧で件数を出すため、投稿側の数も1つ増やす
+  await updateDoc(doc(db, 'posts', postId), { commentCount: increment(1) });
+}
+
+export async function deleteComment(postId, commentId) {
+  await deleteDoc(doc(db, 'posts', postId, 'comments', commentId));
+  await updateDoc(doc(db, 'posts', postId), { commentCount: increment(-1) });
+}
+
+// コメントにもギルティを付けられるようにする
+export function toggleCommentGuilty(postId, commentId, uid, on) {
+  return updateDoc(doc(db, 'posts', postId, 'comments', commentId), {
+    guiltyUids: on ? arrayUnion(uid) : arrayRemove(uid),
   });
 }
 
-export function deleteComment(postId, commentId) {
-  return deleteDoc(doc(db, 'posts', postId, 'comments', commentId));
+/* ---------- ほかの人のページ ---------- */
+
+// その人が共有した記録を集める。並べ替えは取ってきてからこちらで行う
+// （日付での並べ替えまでFirestoreに任せると、別途索引の作成が必要になるため）
+export async function getPostsByUser(uid) {
+  const snap = await getDocs(query(collection(db, 'posts'), where('uid', '==', uid), limit(200)));
+  const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  posts.sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
+  return posts;
 }
