@@ -194,11 +194,12 @@ function enableSwipeBack(target) {
   target.addEventListener('touchcancel', end);
 }
 
-// ホームだけで使う、下スワイプでみんなの記録へ行く動き。
+// ホームだけで使う、下から上へスワイプしてみんなの記録へ行く動き。
 // ログインしていない人には見せる場所がないので、何もしない。
-// ページの一番上から下へ引っぱったときだけ反応し、下方向のスクロールとはぶつからない。
-function enableHomeSwipeDown(target) {
-  const NEED = 90;
+// ページを一番下まで送ったあと、さらに上へ引き上げたときだけ反応するので、
+// ふだんの縦スクロールとはぶつからない。
+function enableHomeSwipeUp(target) {
+  const NEED = 150;    // 戻るより長めに引かないと反応しない
   const SLOPE = 1.3;
   let startX = 0;
   let startY = 0;
@@ -207,14 +208,19 @@ function enableHomeSwipeDown(target) {
   let vertical = false;
   let busy = false;
 
+  function atBottom() {
+    const doc = document.documentElement;
+    const y = window.scrollY || doc.scrollTop || 0;
+    return y + window.innerHeight >= doc.scrollHeight - 2;
+  }
+
   function place(offset, animate) {
     target.style.transition = animate ? 'transform 0.24s cubic-bezier(0.22, 0.9, 0.3, 1)' : 'none';
     target.style.transform = offset ? `translateY(${offset}px)` : '';
   }
 
   target.addEventListener('touchstart', (event) => {
-    const atTop = (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
-    if (busy || event.touches.length !== 1 || currentPath() !== '/' || !me.user || !atTop) {
+    if (busy || event.touches.length !== 1 || currentPath() !== '/' || !me.user || !atBottom()) {
       tracking = false;
       return;
     }
@@ -234,12 +240,13 @@ function enableHomeSwipeDown(target) {
 
     if (!vertical) {
       if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
-      if (my <= 0 || Math.abs(my) < Math.abs(mx) * SLOPE) { tracking = false; return; }
+      // 上向き（my がマイナス）で、横よりはっきり縦に動いたときだけ
+      if (my >= 0 || Math.abs(my) < Math.abs(mx) * SLOPE) { tracking = false; return; }
       vertical = true;
       document.body.classList.add('swiping-back');
     }
 
-    dy = my;
+    dy = my; // 上向きなのでマイナス
     event.preventDefault(); // ページ全体が引っぱられて動くのを止める
     place(dy, false);
   }, { passive: false });
@@ -252,12 +259,12 @@ function enableHomeSwipeDown(target) {
     document.body.classList.remove('swiping-back');
     if (!wasVertical) return;
 
-    if (dy > NEED) {
+    if (-dy > NEED) {
       busy = true;
-      place(window.innerHeight, true); // 指の動きの続きとして、画面の下まで流す
+      place(-window.innerHeight, true); // 指の動きの続きとして、画面の上まで流す
       setTimeout(() => {
         busy = false;
-        swipedDown = true;
+        swipedUp = true;
         location.hash = '#/feed';
       }, 200);
     } else {
@@ -376,7 +383,7 @@ function openAvatarMenu(anchor) {
       <span class="am-name">${esc(myName())}</span>
       <span class="am-mail">${esc(me.user.email)}</span>
     </div>
-    <a class="am-item" href="#/account">プロフィールを編集</a>
+    <a class="am-item" href="#/user/${me.user.uid}">プロフィール</a>
     <a class="am-item" href="#/settings">バックアップ・設定</a>
     <button type="button" class="am-item is-quiet" data-am="logout">ログアウト</button>`;
   document.body.appendChild(menu);
@@ -733,21 +740,62 @@ function badgeImg(tier, extraClass = '') {
   return `<img class="name-badge ${extraClass}" src="${badge.file}" alt="${esc(badge.name)}">`;
 }
 
-// 次の段階までのゲージ。詳細ボタンからバッジ一覧へ行ける
+// 次の段階までのゲージ。右端に次に手に入るバッジを置き、
+// 詳細ボタンからバッジ一覧へ行ける
 function badgeGauge(count) {
   const p = nextBadgeProgress(count);
   const next = p ? badgeByTier(p.nextTier) : null;
+  const nextThumb = next
+    ? (next.file
+      ? `<img class="gauge-next-img" src="${next.file}" alt="${esc(next.name)}">`
+      : '<span class="gauge-next-soon">準備中</span>')
+    : '<span class="gauge-next-soon">達成</span>';
   return `
     <div class="gauge-box">
       <div class="gauge-head">
         <span class="gauge-label">${p ? `次のバッジまで ${p.done}/${p.need}` : 'すべて集まりました'}</span>
         <a class="mini-btn" href="#/badges">詳細</a>
       </div>
-      <div class="gauge-track">
-        <div class="gauge-fill" style="width:${p ? (p.done / p.need) * 100 : 100}%"></div>
+      <div class="gauge-row">
+        <div class="gauge-track">
+          <div class="gauge-fill" style="width:${p ? (p.done / p.need) * 100 : 100}%"></div>
+        </div>
+        <span class="gauge-next" title="${next ? esc(next.name) : ''}">${nextThumb}</span>
       </div>
-      ${next ? `<p class="hint">次は「${esc(next.name)}」</p>` : ''}
     </div>`;
+}
+
+// バッジを手に入れたときの演出（95点のギルティ！と同じ流れ）
+function badgeFlash(tier) {
+  const badge = badgeByTier(tier);
+  if (!badge) return Promise.resolve();
+  return new Promise((resolve) => {
+    const el = document.createElement('div');
+    el.className = 'guilty-flash';
+    el.innerHTML = `<div style="text-align:center">
+      ${badge.file
+        ? `<img class="badge-flash-img" src="${badge.file}" alt="">`
+        : '<p class="badge-flash-soon">準備中</p>'}
+      <p class="badge-word">バッジ獲得</p>
+      <p class="guilty-sub">${esc(badge.name)}</p></div>`;
+    document.body.appendChild(el);
+    navigator.vibrate?.(20);
+    setTimeout(() => { el.remove(); resolve(); }, 1900);
+  });
+}
+
+// 共有したあとに呼ぶ。ちょうど区切りに届いていたら演出を出す
+async function maybeCelebrateBadge() {
+  if (!me.user) return;
+  try {
+    const count = (await cloud.getPostsByUser(me.user.uid)).length;
+    if (count === 0 || count % BADGE_STEP !== 0) return;
+    const tier = badgeTierForCount(count);
+    if (tier < 1 || tier > BADGE_MAX) return;
+    await badgeFlash(tier);
+  } catch (err) {
+    console.error(err);
+  }
 }
 
 let chikiState = { points: 0, lastFed: null, owned: [], equipped: null, redeemedCodes: [] };
@@ -1957,6 +2005,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
             photo: await photoForShare(saved.photoId),
           });
           await db.put('records', { ...saved, postId });
+          await maybeCelebrateBadge(); // 区切りに届いていたらバッジの演出
         } catch (err) {
           console.error(err);
           toast('記録はできましたが、共有に失敗しました');
@@ -2649,6 +2698,19 @@ function commentRow(c, isReply = false) {
 
 /* ===================== ほかの人のページ ===================== */
 
+// ベルのマーク。muted=true なら斜線を1本引いて、音が出ていないことを表す
+function bellIcon(muted) {
+  const bell = '<path d="M12 3.5a5.2 5.2 0 0 0-5.2 5.2v3.1L5.2 15h13.6l-1.6-3.2V8.7A5.2 5.2 0 0 0 12 3.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
+    + '<path d="M10 17.6a2.1 2.1 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>';
+  // 音が出ている表現：ベルの両脇に短い線を添える
+  const waves = muted ? ''
+    : '<path d="M19.6 6.2a7.4 7.4 0 0 1 1.6 3M4.4 6.2a7.4 7.4 0 0 0-1.6 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>';
+  const slash = muted
+    ? '<path d="M4 3.6 20.4 20.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+    : '';
+  return `<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">${bell}${waves}${slash}</svg>`;
+}
+
 // ほかの人の図鑑やカレンダーは、その人が共有した記録から組み立てる。
 // 相手の端末の中身は見られないので、見えるのは共有されたものだけ。
 async function renderUser({ id }) {
@@ -2684,7 +2746,9 @@ async function renderUser({ id }) {
   const eligibleTier = badgeTierForCount(posts.length);
   const badgeTier = Math.min(profile?.badgeChoice ?? eligibleTier, eligibleTier);
 
-  app.innerHTML = header(name, { back: '#/feed', backLabel: 'みんなの記録' }) + `
+  const backTo = isMe ? { back: '#/', backLabel: 'ホーム' } : { back: '#/feed', backLabel: 'みんなの記録' };
+
+  app.innerHTML = header(name, backTo) + `
     <section class="user">
       <div class="user-head">
         <span class="user-avatar">${profile?.avatar
@@ -2704,10 +2768,11 @@ async function renderUser({ id }) {
 
       ${isMe
         ? '<a class="btn btn-ghost btn-block" href="#/account">プロフィールを編集</a>'
-        : `<button type="button" class="btn btn-ghost btn-block" id="mute-btn">
-             ${isMuted(id) ? 'この人のお知らせを受け取る' : 'この人のお知らせを切る'}
-           </button>
-           <p class="hint">切ると、この人が記録を共有してもホームの件数に数えなくなります。</p>`}
+        : `<button type="button" class="bell-btn${isMuted(id) ? ' is-muted' : ''}" id="mute-btn"
+             aria-pressed="${isMuted(id)}"
+             aria-label="${isMuted(id) ? 'この人のお知らせを受け取る' : 'この人のお知らせを切る'}">
+             ${bellIcon(isMuted(id))}
+           </button>`}
 
       ${showZukan ? `
         <h2 class="section-title">図鑑</h2>
@@ -3058,6 +3123,7 @@ function setupShare(record, shopNameText, shopAddressText) {
         await db.put('records', { ...record, postId });
         record.postId = postId;
         toast('みんなに共有しました');
+        await maybeCelebrateBadge(); // 区切りに届いていたらバッジの演出
       }
       renderEdit({ id: record.id }); // 表示を作り直す
     } catch (err) {
@@ -3362,7 +3428,7 @@ const routes = [
 // 進んだのか戻ったのかを見分けるため、ホームからの遠さを数えておく
 let lastDepth = 0;
 let swipedBack = false; // 右スワイプで戻ってきたところかどうか
-let swipedDown = false; // ホームから下スワイプでみんなの記録に来たところかどうか
+let swipedUp = false; // ホームから上スワイプでみんなの記録に来たところかどうか
 
 function depthOf(path) {
   let n = 0;
@@ -3380,11 +3446,11 @@ function playPageIn(back) {
   // スワイプでずらした位置を、動きを付けずに戻す（揺れ戻りを防ぐ）
   app.style.transition = 'none';
   app.style.transform = '';
-  app.classList.remove('page-in', 'page-back', 'page-slide-back', 'page-drop-in');
+  app.classList.remove('page-in', 'page-back', 'page-slide-back', 'page-rise-in');
   void app.offsetWidth; // 作り直して毎回動かす
-  if (swipedDown) {
-    swipedDown = false;
-    app.classList.add('page-drop-in'); // ホームから下スワイプで来たとき、上から滑り込む
+  if (swipedUp) {
+    swipedUp = false;
+    app.classList.add('page-rise-in'); // ホームから上スワイプで来たとき、下から滑り込む
     return;
   }
   if (swipedBack) {
@@ -3429,7 +3495,7 @@ app.addEventListener('click', (event) => {
 });
 
 enableSwipeBack(app); // 右スワイプでひとつ上の画面に戻れるようにする（登録は1回だけ）
-enableHomeSwipeDown(app); // ホームでは下スワイプでみんなの記録へ行けるようにする（登録は1回だけ）
+enableHomeSwipeUp(app); // ホームでは下から上へのスワイプでみんなの記録へ行けるようにする（登録は1回だけ）
 
 loadChikiState().then(() => {
   // ホームを開いた状態で読み込みが終わったら、餌やりボタンの見た目を合わせる
