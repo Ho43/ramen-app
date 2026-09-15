@@ -2980,6 +2980,11 @@ async function renderSettings() {
       <p>身内で記録を見せ合う機能です。まずログインしてください。</p>
       <a class="btn btn-ghost btn-block" href="#/account">アカウント</a>
 
+      <h2 class="section-title">アプリの更新</h2>
+      <p class="hint">新しい版が出ているか調べます。ホーム画面のアイコンを追加し直す必要はありません（追加し直すと端末の記録が消えます）。</p>
+      <button type="button" class="btn btn-ghost btn-block" id="check-update">更新を確認</button>
+      <p class="hint" id="update-state"></p>
+
       <h2 class="section-title">共有した記録から復元</h2>
       <p class="hint">ホーム画面のアイコンを消して入れ直すと、端末の中の記録は消えてしまいます。みんなに共有した分だけは、ここから端末に戻せます。</p>
       <button type="button" class="btn btn-ghost btn-block" id="restore-shared">共有した記録を端末に戻す</button>
@@ -3000,6 +3005,23 @@ async function renderSettings() {
       if (usage != null) $('#usage').textContent = `　使用容量 約${(usage / 1024 / 1024).toFixed(1)}MB`;
     })
     .catch(() => {});
+
+  $('#check-update').onclick = async () => {
+    const btn = $('#check-update');
+    const state = $('#update-state');
+    btn.disabled = true;
+    state.textContent = '確認しています…';
+    const result = await checkForUpdate();
+    if (result === 'updated') {
+      state.textContent = '新しい版が見つかりました。読み込み直します…';
+      setTimeout(() => location.reload(), 900);
+      return;
+    }
+    state.textContent = result === 'latest'
+      ? 'すでに最新です。'
+      : '確認できませんでした。電波の良い場所でお試しください。';
+    btn.disabled = false;
+  };
 
   // 共有した記録を、端末の記録として作り直す
   $('#restore-shared').onclick = async () => {
@@ -3630,7 +3652,61 @@ loadChikiState().then(() => {
 window.addEventListener('hashchange', router);
 router();
 
-// オフラインでも開けるようにする仕組み（Service Worker）を登録
+// オフラインでも開けるようにする仕組み（Service Worker）を登録。
+// あとから「更新を確認」できるよう、登録した結果を覚えておく。
+let swRegistration = null;
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('Service Worker 登録失敗', err));
+  navigator.serviceWorker.register('./sw.js')
+    .then((reg) => { swRegistration = reg; })
+    .catch((err) => console.warn('Service Worker 登録失敗', err));
+}
+
+// 新しい版があるか調べて、あれば取り込んで開き直す。
+// 戻り値は 'updated'（新しくなった）/ 'latest'（すでに最新）/ 'unavailable'（仕組みが使えない）
+async function checkForUpdate() {
+  if (!swRegistration) return 'unavailable';
+  // GitHub Pages側の配信キャッシュを避けるため、時刻を付けて必ず取りに行く
+  const stamp = Date.now();
+  let latest = null;
+  try {
+    const res = await fetch(`./sw.js?t=${stamp}`, { cache: 'no-store' });
+    latest = await res.text();
+  } catch (err) {
+    console.error(err);
+    return 'unavailable';
+  }
+
+  // 今動いている版と中身を比べる
+  let current = null;
+  try {
+    const cache = await caches.open('ramen-log-check');
+    const hit = await cache.match('./sw-current');
+    current = hit ? await hit.text() : null;
+    await cache.put('./sw-current', new Response(latest));
+  } catch (err) {
+    console.error(err);
+  }
+
+  await swRegistration.update();
+
+  // 中身が変わっていなければ、ファイルも変わっていない
+  if (current !== null && current === latest) return 'latest';
+
+  // 新しい版を取り込む。待機している新しいSWがあれば、すぐ交代させる
+  if (swRegistration.waiting) swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+
+  // 画面のファイルもキャッシュを無視して取り直す。
+  // どのキャッシュに入れるかは sw.js 側が決めているので、
+  // 'ramen-log-v' で始まるものをそのまま使う
+  try {
+    const names = (await caches.keys()).filter((k) => k.startsWith('ramen-log-v'));
+    for (const name of names) {
+      const cache = await caches.open(name);
+      await cache.addAll(['./', './index.html', './app.js', './style.css', './cloud.js', './db.js']
+        .map((u) => new Request(u, { cache: 'reload' })));
+    }
+  } catch (err) {
+    console.error(err);
+  }
+  return 'updated';
 }
