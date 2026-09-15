@@ -62,8 +62,9 @@ function goBack(fallback = '#/') {
   else location.hash = fallback;
 }
 
-// 画面ごとの「ひとつ上」。戻る先は履歴ではなく、この並びで決める。
-// 同じ画面を行ったり来たりしていても、スワイプすれば必ずホームに近づく。
+// 画面ごとの「ひとつ上」。画面の深さを数えるときの目安に使う。
+// 実際にスワイプで戻る先は、左上のボタンと同じ backTarget を使う
+// （自分のプロフィールのように、同じURLでも行き先が変わる画面があるため）。
 function parentOf(path) {
   if (path === '/') return null;                 // ホームではこれ以上戻らない
   if (path.startsWith('/post/')) return '#/feed';
@@ -73,6 +74,12 @@ function parentOf(path) {
   if (path === '/gacha') return '#/';
   if (path === '/badges') return '#/account';
   return '#/';
+}
+
+// スワイプで戻れるか。戻れるなら行き先を返す
+function swipeTarget() {
+  if (currentPath() === '/') return null;   // ホームからは戻らない
+  return backTarget;                        // 左上のボタンと同じ行き先
 }
 
 function currentPath() {
@@ -123,7 +130,7 @@ function enableSwipeBack(target) {
 
   target.addEventListener('touchstart', (event) => {
     const path = currentPath();
-    if (busy || event.touches.length !== 1 || !parentOf(path) || swipeOff(path) || inBusyArea(event.target)) {
+    if (busy || event.touches.length !== 1 || !swipeTarget() || swipeOff(path) || inBusyArea(event.target)) {
       tracking = false;
       return;
     }
@@ -176,14 +183,15 @@ function enableSwipeBack(target) {
     const flicked = speed > 0.5 && dx > 44;
 
     if (far || flicked) {
-      const parent = parentOf(currentPath());
+      const parent = swipeTarget();
       if (!parent) { place(0, true); return; }
       busy = true;
       place(S, true); // 指の動きの続きとして、画面の外まで流す
       setTimeout(() => {
         busy = false;
         swipedBack = true;  // 次の描画を「戻る向き」の動きにする
-        location.hash = parent;
+        if (parent === 'history') goBack();
+        else location.hash = parent;
       }, 200);
     } else {
       place(0, true); // 足りなければ元に戻す
@@ -613,7 +621,13 @@ function cropImage(file) {
 /* ===================== 共通パーツ ===================== */
 
 // 画面上部のバー。back に 'history' を渡すと「ひとつ前の画面へ戻る」ボタンになる
+// 左上の「戻る」ボタンが指している行き先。
+// スワイプで戻るときも同じ場所を使うので、表記と実際の移動先が必ず一致する。
+// 画面を切り替えるたびに router が null に戻し、header が呼ばれたときに入る。
+let backTarget = null;
+
 function header(title, { back = '#/', backLabel = 'ホーム' } = {}) {
+  backTarget = back;
   const backEl = back === 'history'
     ? '<button type="button" class="back" data-action="back">‹ 戻る</button>'
     : `<a class="back" href="${back}">‹ ${esc(backLabel)}</a>`;
@@ -3236,7 +3250,12 @@ function shareErrorMessage(err) {
 /* ===================== アカウント（ログイン・プロフィール） ===================== */
 
 async function renderAccount() {
-  app.innerHTML = header('アカウント') + `<section class="account" id="account-slot">
+  // プロフィール画面から開くので、戻り先もそこに合わせる
+  const accountBack = me.user
+    ? { back: `#/user/${me.user.uid}`, backLabel: 'プロフィール' }
+    : { back: '#/settings', backLabel: '設定' };
+
+  app.innerHTML = header('アカウント', accountBack) + `<section class="account" id="account-slot">
     <p class="empty">確認しています…</p>
   </section>`;
   const slot = $('#account-slot');
@@ -3570,6 +3589,7 @@ async function router() {
   // 前の画面がFirebaseを見張ったままにならないよう、毎回止めてから進む
   stopFeed();
   stopPost();
+  backTarget = null; // このあと header が呼ばれたときに入る（ホームでは呼ばれない）
 
   const [path, queryString = ''] = (location.hash.slice(1) || '/').split('?');
   const query = new URLSearchParams(queryString);
