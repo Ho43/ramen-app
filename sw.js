@@ -4,9 +4,15 @@
 // 考え方：ネットにつながるときは最新のファイルを取りに行き、
 // つながらないときは前に保存しておいたファイルを使う。
 // ※ 記録データ（IndexedDB）はここでは扱いません。
+//
+// Firebaseの部品（認証・データベースの機能）だけは別扱い：
+// Google側のサーバーにあるファイルで、中身がほぼ変わらないため、
+// 一度読み込んだらそれを使い回し、毎回ダウンロードし直さないようにする。
+// これによって、ログイン画面を開くたびに時間がかかるのを防ぐ。
 // =====================================================
 
-const CACHE_NAME = 'ramen-log-v25';
+const CACHE_NAME = 'ramen-log-v26';
+const FIREBASE_CACHE = 'ramen-log-firebase-v1';
 const APP_FILES = [
   './',
   './index.html',
@@ -33,14 +39,31 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+      Promise.all(keys
+        .filter((key) => key !== CACHE_NAME && key !== FIREBASE_CACHE)
+        .map((key) => caches.delete(key))))
   );
   self.clients.claim();
 });
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  if (request.method !== 'GET' || new URL(request.url).origin !== location.origin) return;
+  if (request.method !== 'GET') return;
+
+  const isFirebase = request.url.startsWith('https://www.gstatic.com/firebasejs/');
+  if (isFirebase) {
+    // 一度取れたら、あとはずっとキャッシュを使う（先にキャッシュを見て、なければ取りに行く）
+    event.respondWith(
+      caches.match(request).then((cached) => cached || fetch(request).then((response) => {
+        const copy = response.clone();
+        caches.open(FIREBASE_CACHE).then((cache) => cache.put(request, copy));
+        return response;
+      }))
+    );
+    return;
+  }
+
+  if (new URL(request.url).origin !== location.origin) return;
 
   event.respondWith(
     fetch(request)

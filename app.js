@@ -3164,12 +3164,23 @@ async function renderAccount() {
   </section>`;
   const slot = $('#account-slot');
 
+  // 電波が悪いと、この確認だけで時間がかかることがある。
+  // 待たせすぎたら、原因と次の一手を案内する
+  const slowTimer = setTimeout(() => {
+    if (!document.body.contains(slot)) return;
+    slot.innerHTML = `
+      <p class="empty">読み込みに時間がかかっています。<br>電波の良い場所でお試しください。</p>
+      <button type="button" class="btn btn-ghost btn-block" id="account-retry">もう一度試す</button>`;
+    $('#account-retry').onclick = () => renderAccount();
+  }, 8000);
+
   // ログイン状態を1回だけ確認する（画面はこのあと自分で作り直すので、以降の変化は見ない）
   let unsubscribe = () => {};
   let handled = false;
   unsubscribe = cloud.watchAuth(async (user) => {
     if (handled) return; // 2回目以降の通知は無視する
     handled = true;
+    clearTimeout(slowTimer);
     unsubscribe();
     if (!user) {
       renderLoginForm(slot);
