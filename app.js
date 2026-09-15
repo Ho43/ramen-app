@@ -71,6 +71,7 @@ function parentOf(path) {
   if (path.startsWith('/shop/')) return '#/zukan';
   if (path === '/account') return '#/settings';
   if (path === '/gacha') return '#/';
+  if (path === '/badges') return '#/account';
   return '#/';
 }
 
@@ -685,25 +686,68 @@ const COSTUMES = [
 const costumeById = (id) => COSTUMES.find((c) => c.id === id) ?? null;
 
 /* ===================== 名前バッジ（共有した杯数） =====================
-   共有した記録の数（他の人にも見えている数）に応じて、0〜3段階のバッジが解放される。
-   どれを表示するかは本人が選べる（解放していない段階は選べない）。 */
+   共有した記録の数（他の人にも見えている数）に応じて、段階が上がっていく。
+   どれを表示するかは本人が選べる（解放していない段階は選べない）。
+
+   絵がまだ無いものは file を null にしておくと、一覧では「準備中」と出る。
+   絵が用意できたら file にファイル名を入れるだけでそのまま使えるようにしてある。 */
 
 const BADGE_STEP = 5;   // 何杯ごとに1段階上がるか
-const BADGE_MAX = 3;    // 用意してある絵の数
+
+const BADGES = [
+  { name: '箸 一',     file: null },
+  { name: '箸 二',     file: null },
+  { name: '箸 三',     file: null },
+  { name: 'れんげ 一', file: './badge-renge1.png' },
+  { name: 'れんげ 二', file: './badge-renge2.png' },
+  { name: 'れんげ 三', file: './badge-renge3.png' },
+  { name: '丼 一',     file: null },
+  { name: '丼 二',     file: null },
+  { name: '丼 三',     file: null },
+];
+
+const BADGE_MAX = BADGES.length;
+
+// 段階（1始まり）からバッジを引く。0や範囲外なら null
+const badgeByTier = (tier) => (tier >= 1 && tier <= BADGE_MAX ? BADGES[tier - 1] : null);
 
 // 共有した杯数から、解放されている最高の段階を出す（0なら未解放）
 function badgeTierForCount(count) {
   return Math.min(BADGE_MAX, Math.floor(count / BADGE_STEP));
 }
 
-// あと何杯でその段階に届くか
-function badgeRemaining(count, tier) {
-  return Math.max(0, tier * BADGE_STEP - count);
+// 次の段階まであと何杯か。すべて解放済みなら null
+function nextBadgeProgress(count) {
+  const tier = badgeTierForCount(count);
+  if (tier >= BADGE_MAX) return null;
+  return {
+    nextTier: tier + 1,
+    done: count % BADGE_STEP,   // ゲージにたまっている数
+    need: BADGE_STEP,           // 次の段階までに必要な数
+  };
 }
 
 function badgeImg(tier, extraClass = '') {
-  if (!tier) return '';
-  return `<img class="name-badge ${extraClass}" src="./badge${tier}.png" alt="バッジ ${tier}">`;
+  const badge = badgeByTier(tier);
+  if (!badge?.file) return '';
+  return `<img class="name-badge ${extraClass}" src="${badge.file}" alt="${esc(badge.name)}">`;
+}
+
+// 次の段階までのゲージ。詳細ボタンからバッジ一覧へ行ける
+function badgeGauge(count) {
+  const p = nextBadgeProgress(count);
+  const next = p ? badgeByTier(p.nextTier) : null;
+  return `
+    <div class="gauge-box">
+      <div class="gauge-head">
+        <span class="gauge-label">${p ? `次のバッジまで ${p.done}/${p.need}` : 'すべて集まりました'}</span>
+        <a class="mini-btn" href="#/badges">詳細</a>
+      </div>
+      <div class="gauge-track">
+        <div class="gauge-fill" style="width:${p ? (p.done / p.need) * 100 : 100}%"></div>
+      </div>
+      ${next ? `<p class="hint">次は「${esc(next.name)}」</p>` : ''}
+    </div>`;
 }
 
 let chikiState = { points: 0, lastFed: null, owned: [], equipped: null, redeemedCodes: [] };
@@ -1022,6 +1066,80 @@ function costumeThumb(costume, { locked = false, equipped = false } = {}) {
       <span class="cos-rarity">${rarityStars(costume.rarity)}</span>
       ${equipped ? '<span class="cos-badge">着用中</span>' : ''}
     </li>`;
+}
+
+/* ===================== バッジ一覧 ===================== */
+
+async function renderBadges() {
+  if (!me.user) {
+    location.replace('#/settings');
+    return;
+  }
+
+  app.innerHTML = header('バッジ', { back: '#/account', backLabel: 'アカウント' })
+    + '<p class="empty">読み込んでいます…</p>';
+
+  let count = 0;
+  try {
+    count = (await cloud.getPostsByUser(me.user.uid)).length;
+  } catch (err) {
+    console.error(err);
+    app.innerHTML = header('バッジ', { back: '#/account', backLabel: 'アカウント' })
+      + `<p class="empty">${esc(shareErrorMessage(err))}</p>`;
+    return;
+  }
+
+  const eligibleTier = badgeTierForCount(count);
+  let choice = Math.min(me.profile?.badgeChoice ?? eligibleTier, eligibleTier);
+
+  app.innerHTML = header('バッジ', { back: '#/account', backLabel: 'アカウント' }) + `
+    <section class="badges">
+      <p class="hint">共有した記録が${BADGE_STEP}杯たまるごとに、次のバッジが手に入る。今は ${count}杯。</p>
+      ${badgeGauge(count)}
+
+      <h2 class="section-title">名前に付けるバッジを選ぶ</h2>
+      <ul class="badge-grid" id="badge-grid"></ul>
+    </section>`;
+
+  function draw() {
+    const rows = [`
+      <li class="badge-cell${choice === 0 ? ' is-selected' : ''}" data-badge="0">
+        <span class="bg-thumb bg-thumb-none">なし</span>
+        <span class="bg-name">付けない</span>
+      </li>`];
+    for (let tier = 1; tier <= BADGE_MAX; tier += 1) {
+      const badge = badgeByTier(tier);
+      const locked = tier > eligibleTier;
+      const soon = !badge.file; // 絵がまだ用意できていないもの
+      rows.push(`
+        <li class="badge-cell${locked || soon ? ' is-locked' : ''}${choice === tier ? ' is-selected' : ''}"
+          data-badge="${tier}" ${locked || soon ? 'data-disabled="1"' : ''}>
+          <span class="bg-thumb">${soon ? '<span class="bg-soon">準備中</span>' : badgeImg(tier)}</span>
+          <span class="bg-name">${esc(badge.name)}</span>
+          <span class="bg-need">${locked ? `${tier * BADGE_STEP}杯` : soon ? '絵を準備中' : '解放済み'}</span>
+        </li>`);
+    }
+    $('#badge-grid').innerHTML = rows.join('');
+  }
+
+  // 一覧はこの画面限りの要素なので、そこに直接付ける
+  $('#badge-grid').addEventListener('click', async (event) => {
+    const cell = event.target.closest('[data-badge]');
+    if (!cell || cell.dataset.disabled) return;
+    choice = Number(cell.dataset.badge);
+    draw();
+    try {
+      await cloud.saveProfile(me.user.uid, { badgeChoice: choice });
+      me.profile = { ...me.profile, badgeChoice: choice };
+      profileCache.set(me.user.uid, me.profile);
+      toast(choice ? 'バッジを変えました' : 'バッジを外しました');
+    } catch (err) {
+      console.error(err);
+      toast(shareErrorMessage(err));
+    }
+  });
+
+  draw();
 }
 
 async function renderGacha() {
@@ -3130,8 +3248,11 @@ function renderProfileForm(slot, user, profile, myCount = 0) {
 
       <div class="field">
         <span class="label">名前に付けるバッジ</span>
-        <p class="hint">共有した記録${BADGE_STEP}杯ごとに1段階解放される。持っている段階の中から、表示するものを選べる。</p>
-        <ul class="badge-picker" id="badge-picker"></ul>
+        <div class="badge-now">
+          ${badgeChoice ? badgeImg(badgeChoice) : '<span class="badge-none">付けていない</span>'}
+          <span class="badge-now-name">${badgeChoice ? esc(badgeByTier(badgeChoice)?.name ?? '') : ''}</span>
+        </div>
+        ${badgeGauge(myCount)}
       </div>
 
       <div class="field">
@@ -3158,32 +3279,6 @@ function renderProfileForm(slot, user, profile, myCount = 0) {
   const removeBtn = $('#pf-photo-remove');
   const errorEl = $('#pf-error');
   let avatarChange; // undefined = 変更なし / null = 外す / 'data:...' = 新しい画像
-
-  // バッジの選択肢を描く（「なし」＋ 解放済みの段階 ＋ まだ届いていない段階）
-  function drawBadgePicker() {
-    const list = $('#badge-picker');
-    const rows = [`
-      <li class="badge-choice${badgeChoice === 0 ? ' is-selected' : ''}" data-badge="0">
-        <span class="bc-thumb bc-thumb-none">なし</span>
-        <span class="bc-label">なし</span>
-      </li>`];
-    for (let tier = 1; tier <= BADGE_MAX; tier += 1) {
-      const locked = tier > eligibleTier;
-      rows.push(`
-        <li class="badge-choice${locked ? ' is-locked' : ''}${badgeChoice === tier ? ' is-selected' : ''}" data-badge="${tier}">
-          <span class="bc-thumb">${badgeImg(tier)}</span>
-          <span class="bc-label">${locked ? `あと${badgeRemaining(myCount, tier)}杯` : `${tier}段階目`}</span>
-        </li>`);
-    }
-    list.innerHTML = rows.join('');
-    list.querySelectorAll('.badge-choice:not(.is-locked)').forEach((el) => {
-      el.onclick = () => {
-        badgeChoice = Number(el.dataset.badge);
-        drawBadgePicker();
-      };
-    });
-  }
-  drawBadgePicker();
 
   function showAvatar(url) {
     preview.hidden = !url;
@@ -3258,6 +3353,7 @@ const routes = [
   { path: /^\/settings$/, view: renderSettings },
   { path: /^\/account$/, view: renderAccount },
   { path: /^\/gacha$/, view: renderGacha },
+  { path: /^\/badges$/, view: renderBadges },
   { path: /^\/feed$/, view: renderFeed },
   { path: /^\/post\/([\w-]+)$/, view: renderPost },
   { path: /^\/user\/([\w@.-]+)$/, view: renderUser },
