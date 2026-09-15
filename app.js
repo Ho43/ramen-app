@@ -360,11 +360,8 @@ function avatarButton() {
   if (!me.user) {
     return '<a class="avatar-btn is-guest" href="#/account" aria-label="ログイン">ロ</a>';
   }
-  const url = me.profile?.avatar;
-  const inner = url
-    ? `<img src="${url}" alt="">`
-    : esc(myName().slice(0, 1));
-  return `<button type="button" class="avatar-btn" id="avatar-btn" aria-label="アカウントメニュー">${inner}</button>`;
+  return `<button type="button" class="avatar-btn" id="avatar-btn" aria-label="アカウントメニュー">
+    <img src="${avatarOf(me.profile?.avatar)}" alt=""></button>`;
 }
 
 // アイコンを押したときに出る小さなメニュー
@@ -1029,8 +1026,11 @@ async function renderHome() {
         ${mascot(subject?.score ?? 50)}
         <span class="greet-body">
           <span class="greet-talk">${esc(talk)}<small>${esc(talkSub)}</small></span>
-          <span class="greet-feed${fedToday() ? ' is-done' : ''}" id="greet-feed">
-            ${fedToday() ? '今日はもう食べた' : 'タップで餌をあげる'}
+          <span class="greet-foot">
+            <span class="greet-feed${fedToday() ? ' is-done' : ''}" id="greet-feed">
+              ${fedToday() ? '今日はもう食べた' : 'タップで餌をあげる'}
+            </span>
+            <span class="greet-points" id="greet-points">${chikiState.points}<small>pt</small></span>
           </span>
         </span>
       </button>
@@ -1076,6 +1076,7 @@ async function renderHome() {
     tap(greetBtn.querySelector('.chiki')); // 食べた反応
     $('#greet-feed').textContent = '今日はもう食べた';
     $('#greet-feed').classList.add('is-done');
+    $('#greet-points').innerHTML = `${chikiState.points}<small>pt</small>`;
     await new Promise((r) => setTimeout(r, 260));
     toast(`ギルチキが餌を食べた。+${amount}pt`);
     greetBtn.disabled = false;
@@ -2077,11 +2078,18 @@ function whenText(stamp) {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+// アイコンを設定していない人に使う初期アイコン
+const DEFAULT_AVATARS = [
+  { id: './avatar-bowl.png', name: 'どんぶり' },
+  { id: './avatar-yolk.png', name: '黄身' },
+];
+const DEFAULT_AVATAR = DEFAULT_AVATARS[0].id;
+
+// 設定されていなければ初期アイコンを使う
+const avatarOf = (avatar) => avatar || DEFAULT_AVATAR;
+
 function avatarChip(nickname, avatar) {
-  const name = nickname || '名無し';
-  return avatar
-    ? `<img class="chip-avatar" src="${avatar}" alt="">`
-    : `<span class="chip-avatar is-letter">${esc(name.slice(0, 1))}</span>`;
+  return `<img class="chip-avatar" src="${avatarOf(avatar)}" alt="">`;
 }
 
 // 一度読んだプロフィールは覚えておく。
@@ -2719,7 +2727,11 @@ async function renderUser({ id }) {
     return;
   }
 
-  app.innerHTML = header('プロフィール', { back: '#/feed', backLabel: 'みんなの記録' })
+  const isMe = id === me.user.uid;
+  // 自分のプロフィールはホームから開くので、戻り先もホームにする
+  const backTo = isMe ? { back: '#/', backLabel: 'ホーム' } : { back: '#/feed', backLabel: 'みんなの記録' };
+
+  app.innerHTML = header('プロフィール', backTo)
     + '<p class="empty">読み込んでいます…</p>';
 
   let profile = null;
@@ -2728,12 +2740,11 @@ async function renderUser({ id }) {
     [profile, posts] = await Promise.all([cloud.getProfile(id), cloud.getPostsByUser(id)]);
   } catch (err) {
     console.error(err);
-    app.innerHTML = header('プロフィール', { back: '#/feed', backLabel: 'みんなの記録' })
+    app.innerHTML = header('プロフィール', backTo)
       + `<p class="empty">${esc(shareErrorMessage(err))}</p>`;
     return;
   }
 
-  const isMe = id === me.user.uid;
   const name = profile?.nickname ?? '名無し';
   const bio = (profile?.bio ?? '').trim();
   const shopNames = new Set(posts.map((p) => p.shopName));
@@ -2746,14 +2757,10 @@ async function renderUser({ id }) {
   const eligibleTier = badgeTierForCount(posts.length);
   const badgeTier = Math.min(profile?.badgeChoice ?? eligibleTier, eligibleTier);
 
-  const backTo = isMe ? { back: '#/', backLabel: 'ホーム' } : { back: '#/feed', backLabel: 'みんなの記録' };
-
   app.innerHTML = header(name, backTo) + `
     <section class="user">
       <div class="user-head">
-        <span class="user-avatar">${profile?.avatar
-          ? `<img src="${profile.avatar}" alt="">`
-          : esc(name.slice(0, 1))}</span>
+        <span class="user-avatar"><img src="${avatarOf(profile?.avatar)}" alt=""></span>
         <div class="user-lines">
           <h2 class="user-name">${esc(name)}${badgeImg(badgeTier)}</h2>
           ${bio ? `<p class="user-bio">${esc(bio)}</p>` : ''}
@@ -2959,9 +2966,11 @@ async function renderSettings() {
       <p>身内で記録を見せ合う機能です。まずログインしてください。</p>
       <a class="btn btn-ghost btn-block" href="#/account">アカウント</a>
 
-      <h2 class="section-title">ギルチキ</h2>
-      <a class="btn btn-ghost btn-block" href="#/gacha">ガチャ・持っている衣装</a>
+      <h2 class="section-title">共有した記録から復元</h2>
+      <p class="hint">ホーム画面のアイコンを消して入れ直すと、端末の中の記録は消えてしまいます。みんなに共有した分だけは、ここから端末に戻せます。</p>
+      <button type="button" class="btn btn-ghost btn-block" id="restore-shared">共有した記録を端末に戻す</button>
 
+      <h2 class="section-title">コード</h2>
       <div class="field">
         <label for="redeem-code">コードを入力</label>
         <div class="redeem-row">
@@ -2977,6 +2986,74 @@ async function renderSettings() {
       if (usage != null) $('#usage').textContent = `　使用容量 約${(usage / 1024 / 1024).toFixed(1)}MB`;
     })
     .catch(() => {});
+
+  // 共有した記録を、端末の記録として作り直す
+  $('#restore-shared').onclick = async () => {
+    const btn = $('#restore-shared');
+    if (!me.user) {
+      toast('先にログインしてください');
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const mine = await cloud.getPostsByUser(me.user.uid);
+      if (!mine.length) {
+        toast('共有した記録がありません');
+        btn.disabled = false;
+        return;
+      }
+      const { shops, records } = await loadAll();
+      // すでに端末にある分（同じ投稿から戻したもの）は作らない
+      const known = new Set(records.map((r) => r.postId).filter(Boolean));
+      const target = mine.filter((p) => !known.has(p.id));
+      if (!target.length) {
+        toast('戻せる記録はありません');
+        btn.disabled = false;
+        return;
+      }
+      if (!confirm(`${target.length}件を端末の記録として戻します。よろしいですか？`)) {
+        btn.disabled = false;
+        return;
+      }
+
+      // 店名でまとめる。同じ名前のお店がすでにあればそれを使う
+      const shopByName = new Map(shops.map((sh) => [sh.name, sh]));
+      // 古い順に戻すと、図鑑の「初めて食べた時」が正しくなる
+      for (const post of [...target].reverse()) {
+        let shop = shopByName.get(post.shopName);
+        if (!shop) {
+          shop = { id: newId(), name: post.shopName, address: post.shopAddress ?? '', createdAt: Date.now() };
+          shopByName.set(post.shopName, shop);
+        }
+        let photoId = null;
+        let newPhoto = null;
+        if (post.photo) {
+          photoId = newId();
+          newPhoto = { id: photoId, blob: await (await fetch(post.photo)).blob() };
+        }
+        const record = {
+          id: newId(),
+          shopId: shop.id,
+          menu: post.menu,
+          date: post.date,
+          score: post.score,
+          comment: post.comment ?? '',
+          photoId,
+          postId: post.id,  // もう共有済みなので、そのまま結び付けておく
+          createdAt: (post.createdAt?.seconds ?? 0) * 1000 || Date.now(),
+          updatedAt: Date.now(),
+        };
+        await db.saveRecord({ shop, record, newPhoto, oldPhotoId: null });
+      }
+      askPersist();
+      toast(`${target.length}件を戻しました`);
+      renderSettings();
+    } catch (err) {
+      console.error(err);
+      toast(shareErrorMessage(err));
+      btn.disabled = false;
+    }
+  };
 
   $('#redeem-btn').onclick = async () => {
     const input = $('#redeem-code');
@@ -3299,7 +3376,7 @@ function renderProfileForm(slot, user, profile, myCount = 0) {
 
     <form id="profile-form" novalidate>
       <div class="field">
-        <span class="label">アイコン<small>（なくても登録できます）</small></span>
+        <span class="label">アイコン</span>
         <div class="photo-pick avatar-pick">
           <img id="pf-preview" alt="選んだアイコン" ${avatarUrl ? '' : 'hidden'} ${avatarUrl ? `src="${avatarUrl}"` : ''}>
           <span id="pf-noimage" ${avatarUrl ? 'hidden' : ''}>${noImage}</span>
@@ -3311,6 +3388,15 @@ function renderProfileForm(slot, user, profile, myCount = 0) {
           </label>
           <button type="button" class="btn btn-ghost" id="pf-photo-remove" ${avatarUrl ? '' : 'hidden'}>外す</button>
         </div>
+        <p class="hint">用意してあるアイコンから選ぶこともできます。</p>
+        <ul class="avatar-presets" id="avatar-presets">
+          ${DEFAULT_AVATARS.map((a) => `
+            <li>
+              <button type="button" class="preset-btn" data-preset="${a.id}" aria-label="${esc(a.name)}">
+                <img src="${a.id}" alt="">
+              </button>
+            </li>`).join('')}
+        </ul>
       </div>
 
       <div class="field">
@@ -3319,7 +3405,7 @@ function renderProfileForm(slot, user, profile, myCount = 0) {
       </div>
 
       <div class="field">
-        <label for="pf-bio">一言紹介<small>（なくても登録できます）</small></label>
+        <label for="pf-bio">ひとこと</label>
         <textarea id="pf-bio" rows="2" maxlength="60" placeholder="よろしくお願いします">${esc(profile?.bio)}</textarea>
       </div>
 
@@ -3334,7 +3420,7 @@ function renderProfileForm(slot, user, profile, myCount = 0) {
 
       <div class="field">
         <span class="label">公開する情報</span>
-        <p class="hint">みんなの記録であなたのアイコンを押した人に、何を見せるかを決められます。見せるのは共有した記録だけで、端末の中の記録は公開されません。</p>
+        <p class="hint">他ユーザーが閲覧できる項目を設定する。</p>
         <label class="check-row">
           <input type="checkbox" id="pf-zukan" ${profile?.showZukan === false ? '' : 'checked'}>
           <span>図鑑を見せる</span>
@@ -3379,6 +3465,14 @@ function renderProfileForm(slot, user, profile, myCount = 0) {
     avatarChange = null;
     showAvatar(null);
   };
+
+  // 用意してあるアイコンを選んだとき
+  $('#avatar-presets').addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-preset]');
+    if (!btn) return;
+    avatarChange = btn.dataset.preset;
+    showAvatar(avatarChange);
+  });
 
   $('#profile-form').onsubmit = async (event) => {
     event.preventDefault();

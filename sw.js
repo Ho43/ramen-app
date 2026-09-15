@@ -11,7 +11,7 @@
 // これによって、ログイン画面を開くたびに時間がかかるのを防ぐ。
 // =====================================================
 
-const CACHE_NAME = 'ramen-log-v26';
+const CACHE_NAME = 'ramen-log-v27';
 const FIREBASE_CACHE = 'ramen-log-firebase-v1';
 const APP_FILES = [
   './',
@@ -22,6 +22,8 @@ const APP_FILES = [
   './cloud.js',
   './firebase-config.js',
   './giruchiki.png',
+  './avatar-bowl.png',
+  './avatar-yolk.png',
   './badge-renge1.png',
   './badge-renge2.png',
   './badge-renge3.png',
