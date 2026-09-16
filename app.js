@@ -1506,12 +1506,30 @@ function currentPosition() {
 }
 
 // 名前がすでに図鑑にあるお店と近そうなら、大まかに「行ったことがある」とみなす。
-// 完全一致ではないので多少の誤判定はあるが、目安としては十分
+// 完全一致ではないので多少の誤判定はあるが、目安としては十分。
+// カタカナ／ひらがなの違いは吸収するが、「ブタ」と「豚」のように表記そのものが
+// 違う場合は、文字の重なり具合（何文字が共通しているか）で緩く判定する
+function normalizeForMatch(s) {
+  return s.replace(/\s/g, '')
+    // カタカナをひらがなに寄せる（「ブタ」と「ぶた」を同じ扱いにするため）
+    .replace(/[\u30a1-\u30f6]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+}
+
+function charOverlapRatio(a, b) {
+  const setA = new Set(a);
+  const setB = new Set(b);
+  const common = [...setA].filter((c) => setB.has(c));
+  const minSize = Math.min(setA.size, setB.size);
+  return minSize ? common.length / minSize : 0;
+}
+
 function looksKnown(placeName, shopNames) {
-  const n = placeName.replace(/\s/g, '');
+  const n = normalizeForMatch(placeName);
   return shopNames.some((s) => {
-    const t = s.replace(/\s/g, '');
-    return n.includes(t) || t.includes(n);
+    const t = normalizeForMatch(s);
+    if (n.includes(t) || t.includes(n)) return true; // 表記がそのまま含まれていれば確実
+    // 短すぎる名前同士の偶然の一致を避けるため、2文字未満は対象外
+    return Math.min(n.length, t.length) >= 2 && charOverlapRatio(n, t) >= 0.7;
   });
 }
 
@@ -3429,7 +3447,7 @@ function downloadFile(file) {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v33';
+const APP_VERSION = 'ramen-log-v34';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
