@@ -1593,6 +1593,13 @@ async function searchNearbyRamen(coords) {
   return data.places ?? [];
 }
 
+// 「済」の判子を押したときにギルチキが言う一言。毎回ランダムに選ぶ
+const KNOWN_STAMP_TALK = [
+  'ここはもう行ったことあるみたいだぜ。',
+  'なんだ？また行きてぇのか？',
+  '新しく開拓してみてもいいんじゃないか。',
+];
+
 async function renderNearby() {
   const { shops } = await loadAll();
   const shopNames = shops.map((s) => s.name);
@@ -1620,7 +1627,7 @@ async function renderNearby() {
     event.preventDefault();
     event.stopPropagation();
     tap(stamp);
-    toast('このお店は図鑑にあります。行ったことがあるはずです。');
+    toast(pick(KNOWN_STAMP_TALK));
   });
 
   btn.onclick = async () => {
@@ -1646,7 +1653,7 @@ async function renderNearby() {
                 <span class="nearby-name">${esc(name)}</span>
                 <span class="nearby-address">${esc(address)}</span>
               </a>
-              ${known ? '<button type="button" class="nearby-stamp" data-knownstamp aria-label="図鑑に登録済みです">済</button>' : ''}
+              ${known ? '<button type="button" class="nearby-stamp" data-knownstamp aria-label="このお店について、ギルチキがひとこと">済</button>' : ''}
             </li>`;
         }).join('')}</ul>`;
       }
