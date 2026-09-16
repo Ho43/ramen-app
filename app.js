@@ -2632,17 +2632,9 @@ function commentIcon() {
   </svg>`;
 }
 
-// お知らせのベル
-function bellIcon() {
-  return `<svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
-    <path d="M10 3a4.5 4.5 0 0 0-4.5 4.5c0 3-1.2 4.2-1.2 4.2h11.4s-1.2-1.2-1.2-4.2A4.5 4.5 0 0 0 10 3z"
-      fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-    <path d="M8.4 14.4a1.8 1.8 0 0 0 3.2 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-  </svg>`;
-}
-
 // 「…」（自分の投稿の操作メニュー）
-function kebabIcon() {  return `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+function kebabIcon() {
+  return `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
     <circle cx="4" cy="10" r="1.6" fill="currentColor"/>
     <circle cx="10" cy="10" r="1.6" fill="currentColor"/>
     <circle cx="16" cy="10" r="1.6" fill="currentColor"/>
@@ -3506,7 +3498,7 @@ function downloadFile(file) {
    未読の数は、いちばん上の version を読んだかどうかで数えている。 */
 const CHANGELOG = [
   {
-    version: 'ramen-log-v35',
+    version: 'ramen-log-v36',
     date: '2026-09-16',
     title: 'お知らせと更新のお知らせ',
     items: [
@@ -3584,7 +3576,7 @@ async function markNewsRead() {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v35';
+const APP_VERSION = 'ramen-log-v36';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
