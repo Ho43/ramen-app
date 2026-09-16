@@ -1730,6 +1730,11 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
         <p class="hint" id="f-count"></p>
       </div>
 
+      <div class="field" id="f-address-field" hidden>
+        <label for="f-address">住所<small>（任意。入れると地図で開けます）</small></label>
+        <input id="f-address" type="text" placeholder="住所を入力" maxlength="120" autocomplete="off">
+      </div>
+
       <div class="field">
         <label for="f-menu">食べたもの</label>
         <input id="f-menu" type="text" placeholder="例：特製醤油ラーメン" maxlength="60" autocomplete="off" value="${esc(record?.menu ?? saved0?.menu)}">
@@ -1818,6 +1823,10 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
   const cropBtn = $('#f-photo-crop');
   const errorEl = $('#f-error');
 
+  const addressField = $('#f-address-field');
+  const addressInput = $('#f-address');
+  let addressShownFor = null; // 直前に住所欄を出したお店（切り替わったときだけ入れ直す）
+
   // --- お店の選択 ---
   function updateShopUI() {
     const value = shopSelect.value;
@@ -1833,12 +1842,24 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
     } else {
       countHint.textContent = '';
     }
+
+    // 既存のお店を選んでいるときだけ、住所を直せる欄を出す
+    const isExisting = value && value !== '__new';
+    addressField.hidden = !isExisting;
+    if (isExisting && addressShownFor !== value) {
+      addressInput.value = shops.find((s) => s.id === value)?.address ?? '';
+      addressShownFor = value;
+    }
   }
   shopSelect.onchange = () => {
     updateShopUI();
     if (shopSelect.value === '__new') newShopInput.focus();
   };
   updateShopUI();
+  // 書きかけに住所の変更が残っていれば、それを優先する（同じお店を選び直したときだけ）
+  if (!addressField.hidden && saved0?.existingAddress !== undefined) {
+    addressInput.value = saved0.existingAddress;
+  }
 
   // --- 評価（0〜100点） ---
   const scoreBox = $('#f-score-box');
@@ -1944,6 +1965,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       score: Number(scoreRange.value),
       comment: $('#f-comment').value,
       withUids: [...withUids],
+      existingAddress: addressField.hidden ? undefined : addressInput.value,
       share: $('#f-share')?.checked ?? false,
       photoBlob: photoChange instanceof Blob ? photoChange : null,
       previewUrl,
@@ -1996,6 +2018,13 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       if (shopValue === '__new') {
         shop = { id: newId(), name: newName, address: newAddressInput.value.trim(), createdAt: Date.now() };
         shopId = shop.id;
+      } else {
+        // 既存のお店を選んでいる場合、住所欄が変えられていれば一緒に保存する
+        const existingShop = shops.find((s) => s.id === shopValue);
+        const addressValue = addressInput.value.trim();
+        if (existingShop && addressValue !== (existingShop.address ?? '')) {
+          shop = { ...existingShop, address: addressValue };
+        }
       }
 
       let photoId = record?.photoId ?? null;
@@ -2266,6 +2295,79 @@ function commentIcon() {
   </svg>`;
 }
 
+// 「…」（自分の投稿の操作メニュー）
+function kebabIcon() {
+  return `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+    <circle cx="4" cy="10" r="1.6" fill="currentColor"/>
+    <circle cx="10" cy="10" r="1.6" fill="currentColor"/>
+    <circle cx="16" cy="10" r="1.6" fill="currentColor"/>
+  </svg>`;
+}
+
+// 自分の投稿の「…」を押したときに出る、編集・削除の小さなメニュー
+function openPostMenu(anchor, postId) {
+  if (document.getElementById('post-menu')) {
+    document.getElementById('post-menu').remove();
+    return;
+  }
+
+  const menu = document.createElement('div');
+  menu.id = 'post-menu';
+  menu.className = 'avatar-menu';
+  menu.innerHTML = `
+    <button type="button" class="am-item" data-pm="edit">編集</button>
+    <button type="button" class="am-item is-quiet" data-pm="delete">削除</button>`;
+  document.body.appendChild(menu);
+
+  const box = anchor.getBoundingClientRect();
+  menu.style.top = `${box.bottom + 8}px`;
+  menu.style.right = `${Math.max(8, window.innerWidth - box.right)}px`;
+
+  function close() {
+    menu.remove();
+    document.removeEventListener('pointerdown', onOutside, true);
+  }
+  function onOutside(event) {
+    if (!menu.contains(event.target) && event.target !== anchor) close();
+  }
+  setTimeout(() => document.addEventListener('pointerdown', onOutside, true), 0);
+
+  menu.addEventListener('click', async (event) => {
+    const action = event.target.dataset.pm;
+    if (!action) return;
+    close();
+    if (action === 'edit') await editSharedPost(postId);
+    else if (action === 'delete') await deleteSharedPost(postId);
+  });
+}
+
+// 「編集」：この投稿のもとになった端末側の記録を開く。
+// 記録そのものの編集画面（renderEdit）は共有中なら保存のたびに投稿へも反映されるので、
+// 住所を含めてすべての項目をそこでまとめて直せる。
+async function editSharedPost(postId) {
+  const found = await shopForPost(postId);
+  if (!found) {
+    toast('この端末に元の記録が見つかりませんでした');
+    return;
+  }
+  location.hash = `#/edit/${found.record.id}`;
+}
+
+// 「削除」：みんなの記録から消す。端末側の記録は残り、共有中の印だけ外れる
+async function deleteSharedPost(postId) {
+  if (!confirm('この投稿をみんなの記録から削除しますか？元には戻せません。')) return;
+  try {
+    await cloud.deletePost(postId);
+    await clearLocalPostLink(postId);
+    toast('投稿を削除しました');
+    const path = (location.hash.slice(1) || '/').split('?')[0];
+    if (path.startsWith('/post/')) location.hash = '#/feed';
+  } catch (err) {
+    console.error(err);
+    toast(shareErrorMessage(err));
+  }
+}
+
 function postCard(post, { withLastComment = true } = {}) {
   // 写真は押すと直接拡大表示になる。投稿本文への遷移とは別の操作にするため、
   // <a class="post-body"> の中にあってもボタンとして扱う（クリックはJS側で止める）。
@@ -2275,6 +2377,7 @@ function postCard(post, { withLastComment = true } = {}) {
        </button>`
     : '';
   const comment = (post.comment ?? '').trim();
+  const mine = Boolean(me.user) && post.uid === me.user.uid;
 
   // 一緒に食べた人。名前は投稿時のものではなく、読めていれば最新のものを使う
   const withUids = post.withUids ?? [];
@@ -2297,6 +2400,7 @@ function postCard(post, { withLastComment = true } = {}) {
           <span class="post-who">${esc(nameFor(post.uid, post.nickname))}</span>
         </a>
         <span class="post-when">${esc(whenText(post.createdAt))}</span>
+        ${mine ? `<button type="button" class="post-kebab" data-postmenu="${post.id}" aria-haspopup="true" aria-label="投稿の操作">${kebabIcon()}</button>` : ''}
       </div>
       <a class="post-body" href="#/post/${post.id}">
         ${photo}
@@ -2643,13 +2747,7 @@ async function renderPost({ id, query }) {
       await ensureProfiles(post.withUids ?? []);
       if (!document.body.contains(slot)) return;
       thisPost = post;
-      const mine = me.user.uid === post.uid;
-      slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false })}</ul>`
-        + (mine ? `
-          <button type="button" class="btn btn-ghost btn-block" id="post-address">
-            住所を${post.shopAddress ? '変更' : '登録'}
-          </button>
-          <button type="button" class="btn btn-danger btn-block" id="post-delete">この投稿を削除</button>` : '');
+      slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false })}</ul>`;
       restorePop(slot);
       const btn = slot.querySelector('[data-guilty]');
       if (btn) {
@@ -2663,42 +2761,6 @@ async function renderPost({ id, query }) {
             console.error(err);
             btn.classList.toggle('is-on', !on);
             toast('うまくいきませんでした');
-          }
-        };
-      }
-      const addressBtn = slot.querySelector('#post-address');
-      if (addressBtn) {
-        addressBtn.onclick = async () => {
-          const address = prompt('お店の住所を入力してください（空にすると削除します）', post.shopAddress ?? '')?.trim();
-          if (address === undefined) return; // キャンセル
-          addressBtn.disabled = true;
-          try {
-            // お店自体の住所も直しておく。次にこのお店で記録するときにも引き継がれる
-            const found = await shopForPost(post.id);
-            if (found) await db.put('shops', { ...found.shop, address });
-            await cloud.updatePost(post.id, { shopAddress: address });
-            toast(address ? '住所を保存しました' : '住所を削除しました');
-          } catch (err) {
-            console.error(err);
-            toast(shareErrorMessage(err));
-          }
-          addressBtn.disabled = false;
-        };
-      }
-      const delBtn = slot.querySelector('#post-delete');
-      if (delBtn) {
-        delBtn.onclick = async () => {
-          if (!confirm('この投稿をみんなの記録から削除しますか？元には戻せません。')) return;
-          delBtn.disabled = true;
-          try {
-            await cloud.deletePost(post.id);
-            await clearLocalPostLink(post.id); // 端末側に記録が残っていれば、共有中の印を外す
-            toast('投稿を削除しました');
-            location.hash = '#/feed';
-          } catch (err) {
-            console.error(err);
-            toast(shareErrorMessage(err));
-            delBtn.disabled = false;
           }
         };
       }
@@ -3097,7 +3159,7 @@ function downloadFile(file) {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v30';
+const APP_VERSION = 'ramen-log-v31';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -3860,6 +3922,12 @@ async function router() {
 // 「戻る」ボタン（画面ごとに作り直されるので、親要素でまとめて受け取る）
 app.addEventListener('click', (event) => {
   if (event.target.closest('[data-action="back"]')) goBack();
+
+  const kebab = event.target.closest('[data-postmenu]');
+  if (kebab) {
+    event.preventDefault();
+    openPostMenu(kebab, kebab.dataset.postmenu);
+  }
 });
 
 enableSwipeBack(app); // 右スワイプでひとつ上の画面に戻れるようにする（登録は1回だけ）
