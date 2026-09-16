@@ -70,6 +70,7 @@ function parentOf(path) {
   if (path.startsWith('/post/')) return '#/feed';
   if (path.startsWith('/user/')) return '#/feed';
   if (path.startsWith('/shop/')) return '#/zukan';
+  if (path === '/nearby') return '#/zukan';
   if (path === '/account') return '#/settings';
   if (path === '/gacha') return '#/';
   if (path === '/badges') return '#/account';
@@ -654,6 +655,16 @@ const noImage = '<span class="noimage">No Image</span>';
 /* ===================== マスコット「ギルチキ」 ===================== */
 
 const GUILTY = 95; // この点数以上が「ギルティ」
+
+// 「まだ行っていない近くの店を探す」で使うAPIキー。
+// Google Cloud側で「Places API (New)のみ」「このサイト(ho43.github.io/ramen-app)のみ」に
+// 制限してあるので、コードに直接書いても悪用されにくい。
+// もしキーを作り直したときは、ここを書き換える。
+const PLACES_API_KEY = 'AIzaSyBhWQ4BKaWDGpTDiIsHIFqa0TvKSSVBNyM';
+
+// 課金が発生しないよう、呼び出し回数をアプリ側でも絞っておく（Google側の割り当てとは別の保険）。
+// 場所を変えて何度か試せるよう、1回きりではなく少し余裕を持たせている
+const NEARBY_DAILY_LIMIT = 3;
 // 点数を4段階に分ける
 function faceTier(score) {
   if (score >= GUILTY) return 3; // ギルティ
@@ -1443,7 +1454,9 @@ async function renderZukan() {
     };
   }));
 
-  app.innerHTML = header('図鑑') + (items.length
+  app.innerHTML = header('図鑑') + `
+    <a class="btn btn-ghost btn-block" href="#/nearby">まだ行っていない近くの店を探す</a>
+  ` + (items.length
     ? `<ul class="zukan">${items.map(zukanCard).join('')}</ul>`
     : '<p class="empty">まだお店がありません。<br><a href="#/new">最初の一杯を記録する</a></p>');
 }
@@ -1464,6 +1477,132 @@ function zukanCard({ shop, no, count, comment, url }) {
       </a>
     </li>`;
 }
+
+/* ===================== まだ行っていない近くの店 ===================== */
+
+// アプリ側の回数制限。'chiki' はキー値ストアとして使い回している
+async function nearbyUsageToday() {
+  const rec = await db.get('chiki', 'nearbySearchUsage');
+  const today = todayStr();
+  return rec?.date === today ? rec.count : 0;
+}
+
+async function bumpNearbyUsage() {
+  const today = todayStr();
+  const used = await nearbyUsageToday();
+  await db.put('chiki', { id: 'nearbySearchUsage', date: today, count: used + 1 });
+}
+
+// 現在地を取得する。Promiseでラップして待ちやすくしているだけ
+function currentPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) { reject(new Error('この端末は位置情報に対応していません')); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(pos.coords),
+      () => reject(new Error('位置情報を取得できませんでした。設定で許可されているか確認してください')),
+      { timeout: 10000 },
+    );
+  });
+}
+
+// 名前がすでに図鑑にあるお店と近そうなら、大まかに「行ったことがある」とみなす。
+// 完全一致ではないので多少の誤判定はあるが、目安としては十分
+function looksKnown(placeName, shopNames) {
+  const n = placeName.replace(/\s/g, '');
+  return shopNames.some((s) => {
+    const t = s.replace(/\s/g, '');
+    return n.includes(t) || t.includes(n);
+  });
+}
+
+// Text Search (New) を呼ぶ。field maskは基本項目だけに絞って、
+// 単価の高い区分（評価・写真など）に引き上がらないようにしている
+async function searchNearbyRamen(coords) {
+  const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': PLACES_API_KEY,
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress',
+    },
+    body: JSON.stringify({
+      textQuery: 'ラーメン',
+      languageCode: 'ja',
+      maxResultCount: 10,
+      locationBias: {
+        circle: { center: { latitude: coords.latitude, longitude: coords.longitude }, radius: 3000 },
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(`検索に失敗しました（${res.status}）`);
+  const data = await res.json();
+  return data.places ?? [];
+}
+
+async function renderNearby() {
+  const { shops } = await loadAll();
+  const shopNames = shops.map((s) => s.name);
+  const used = await nearbyUsageToday();
+  const remaining = NEARBY_DAILY_LIMIT - used;
+
+  app.innerHTML = header('まだ行っていない近くの店') + `
+    <section class="nearby">
+      <p class="hint">現在地の近くから、ラーメン屋を探します。図鑑にあるお店は目印を付けて区別します。</p>
+      <p class="hint" id="nearby-remaining">今日はあと${Math.max(remaining, 0)}回探せます。</p>
+      <button type="button" class="btn btn-primary btn-block" id="nearby-search"${remaining <= 0 ? ' disabled' : ''}>
+        ${remaining <= 0 ? '今日はもう使いました' : '近くを探す'}
+      </button>
+      <div id="nearby-result"></div>
+    </section>`;
+
+  const btn = $('#nearby-search');
+  const result = $('#nearby-result');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = '探しています…';
+    result.innerHTML = '';
+    try {
+      const coords = await currentPosition();
+      const places = await searchNearbyRamen(coords);
+      await bumpNearbyUsage();
+
+      if (!places.length) {
+        result.innerHTML = '<p class="empty">近くでは見つかりませんでした。</p>';
+      } else {
+        result.innerHTML = `<ul class="nearby-list">${places.map((p) => {
+          const name = p.displayName?.text ?? '（名前不明）';
+          const address = p.formattedAddress ?? '';
+          const known = looksKnown(name, shopNames);
+          const mapHref = `https://www.google.com/maps/place/?q=place_id:${p.id}`;
+          return `
+            <li class="nearby-item${known ? ' is-known' : ''}">
+              <a href="${mapHref}" target="_blank" rel="noopener">
+                <span class="nearby-name">${esc(name)}${known ? '<small class="nearby-badge">図鑑にあり</small>' : ''}</span>
+                <span class="nearby-address">${esc(address)}</span>
+              </a>
+            </li>`;
+        }).join('')}</ul>`;
+      }
+
+      // 今日の残り回数の表示を更新
+      const left = NEARBY_DAILY_LIMIT - await nearbyUsageToday();
+      $('#nearby-remaining').textContent = `今日はあと${Math.max(left, 0)}回探せます。`;
+      if (left <= 0) {
+        btn.disabled = true;
+        btn.textContent = '今日はもう使いました';
+      } else {
+        btn.disabled = false;
+        btn.textContent = '近くを探す';
+      }
+    } catch (err) {
+      console.error(err);
+      result.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+      btn.disabled = false;
+      btn.textContent = '近くを探す';
+    }
+  };
+}
+
 
 /* ===================== お店の詳細 ===================== */
 
@@ -3290,7 +3429,7 @@ function downloadFile(file) {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v32';
+const APP_VERSION = 'ramen-log-v33';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -3984,6 +4123,7 @@ const routes = [
   { path: /^\/post\/([\w-]+)$/, view: renderPost },
   { path: /^\/user\/([\w@.-]+)$/, view: renderUser },
   { path: /^\/recommend$/, view: renderRecommend },
+  { path: /^\/nearby$/, view: renderNearby },
 ];
 
 // 進んだのか戻ったのかを見分けるため、ホームからの遠さを数えておく

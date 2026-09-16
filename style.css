@@ -1756,6 +1756,54 @@ textarea { resize: vertical; }
   text-decoration: none;
 }
 
+/* ---------- まだ行っていない近くの店 ---------- */
+.nearby-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nearby-item a {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+}
+
+.nearby-item.is-known a { opacity: 0.6; }
+
+.nearby-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mincho);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.nearby-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.nearby-address {
+  font-size: 13px;
+  color: var(--muted);
+}
+
 /* ---------- ガチャ ---------- */
 .gacha-head {
   display: flex;
