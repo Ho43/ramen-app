@@ -815,6 +815,153 @@ textarea { resize: vertical; }
 
 .avatar-btn.is-guest { color: var(--muted); }
 
+/* お知らせのベル。プロフィールアイコンの左に並べる */
+.home-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.news-btn {
+  position: relative;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-top: 30px;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--cream);
+  text-decoration: none;
+}
+
+.news-btn:active { transform: scale(0.96); }
+
+/* 未読の件数。0件のときはそもそも出さない */
+.news-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  display: grid;
+  place-items: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--shu);
+  color: #FFF;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ---------- お知らせの一覧 ---------- */
+.news-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.news-item {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.news-item.is-unread { border-color: var(--yolk-dark); }
+
+.news-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.news-title {
+  font-family: var(--mincho);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.news-new {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--shu);
+  color: #FFF;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.news-meta {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.news-points {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.news-points li { margin-bottom: 2px; }
+
+/* ---------- 起動時の更新のお知らせ ---------- */
+.update-bar {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  padding: 10px 10px 10px 16px;
+  border: 1px solid var(--yolk-dark);
+  border-radius: 999px;
+  background: var(--surface);
+  transform: translateX(-50%);
+}
+
+.update-bar-text {
+  font-size: 13px;
+  color: var(--cream);
+}
+
+.update-bar-go {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 999px;
+  background: var(--yolk);
+  color: #3A2405;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.update-bar-close {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .avatar-menu {
   position: fixed;
   z-index: 25;
@@ -1766,6 +1913,10 @@ textarea { resize: vertical; }
   list-style: none;
 }
 
+.nearby-item {
+  position: relative;
+}
+
 .nearby-item a {
   display: flex;
   flex-direction: column;
@@ -1778,25 +1929,38 @@ textarea { resize: vertical; }
   text-decoration: none;
 }
 
-.nearby-item.is-known a { opacity: 0.6; }
+/* 行ったことがある店は、これから行く店より控えめに見せる */
+.nearby-item.is-known a {
+  opacity: 0.6;
+  padding-right: 62px;
+}
+
+/* 図鑑登録済みの判子。図鑑の来店回数の印と対になる朱色 */
+.nearby-stamp {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin-top: -21px;
+  border: 2px solid var(--shu-dark);
+  border-radius: 50%;
+  background: var(--shu);
+  color: #F7DCD8;
+  font-family: var(--mincho);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transform: rotate(-8deg);
+}
 
 .nearby-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   font-family: var(--mincho);
   font-size: 16px;
   font-weight: 700;
-}
-
-.nearby-badge {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--muted);
-  font-family: var(--sans);
-  font-size: 11px;
-  font-weight: 400;
 }
 
 .nearby-address {

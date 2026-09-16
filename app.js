@@ -1117,6 +1117,7 @@ async function renderHome() {
   lastSavedId = null;
   const subject = justSaved ?? (newest.length ? pick(newest.slice(0, 10)) : null);
   const rec = recommendOne(records, shopMap);
+  const unread = await newsUnreadCount();
   const talk = chikiTalk(records, subject, rec ? [rec.line] : []);
   const showRecLink = Boolean(rec) && talk === rec.line;
   const talkSub = subject
@@ -1134,7 +1135,13 @@ async function renderHome() {
               : 'まだ記録がありません。最初の一杯を記録しましょう。'}
           </p>
         </div>
-        ${avatarButton()}
+        <div class="home-actions">
+          <a class="news-btn" href="#/news" aria-label="お知らせ">
+            ${bellIcon()}
+            ${unread > 0 ? `<span class="news-dot">${unread > 9 ? '9+' : unread}</span>` : ''}
+          </a>
+          ${avatarButton()}
+        </div>
       </div>
 
       <button type="button" class="greet" id="greet-btn" aria-label="${fedToday() ? '今日はもう餌をあげました' : '餌をあげる'}">
@@ -1208,6 +1215,35 @@ async function renderHome() {
       $('#feed-ticket')?.classList.add('has-new');
     });
   }
+}
+
+/* ===================== お知らせ（更新内容） ===================== */
+
+async function renderNews() {
+  const read = await newsReadVersion();
+  const unreadCount = await newsUnreadCount();
+
+  app.innerHTML = header('お知らせ', { back: '#/' }) + `
+    <section class="news">
+      <ul class="news-list">
+        ${CHANGELOG.map((entry, i) => `
+          <li class="news-item${i < unreadCount ? ' is-unread' : ''}">
+            <div class="news-head">
+              <span class="news-title">${esc(entry.title)}</span>
+              ${i < unreadCount ? '<span class="news-new">NEW</span>' : ''}
+            </div>
+            <span class="news-meta">${esc(entry.date)}　${esc(entry.version.replace('ramen-log-', ''))}</span>
+            <ul class="news-points">
+              ${entry.items.map((t) => `<li>${esc(t)}</li>`).join('')}
+            </ul>
+          </li>`).join('')}
+      </ul>
+      <p class="hint">今お使いの版：${esc(APP_VERSION.replace('ramen-log-', ''))}</p>
+    </section>`;
+
+  // 開いた時点で既読にする。表示そのものは今の未読のまま残して、
+  // 何が新しかったのかをこの画面の中では見えるようにしておく
+  if (read !== CHANGELOG[0]?.version) await markNewsRead();
 }
 
 /* ===================== おすすめの一杯 ===================== */
@@ -1575,6 +1611,18 @@ async function renderNearby() {
 
   const btn = $('#nearby-search');
   const result = $('#nearby-result');
+
+  // ハンコはマップへのリンクの上に重なっているので、
+  // 押されたときはリンクの方に伝わらないように止めてから説明を出す
+  result.addEventListener('click', (event) => {
+    const stamp = event.target.closest('[data-knownstamp]');
+    if (!stamp) return;
+    event.preventDefault();
+    event.stopPropagation();
+    tap(stamp);
+    toast('このお店は図鑑にあります。行ったことがあるはずです。');
+  });
+
   btn.onclick = async () => {
     btn.disabled = true;
     btn.textContent = '探しています…';
@@ -1595,9 +1643,10 @@ async function renderNearby() {
           return `
             <li class="nearby-item${known ? ' is-known' : ''}">
               <a href="${mapHref}" target="_blank" rel="noopener">
-                <span class="nearby-name">${esc(name)}${known ? '<small class="nearby-badge">図鑑にあり</small>' : ''}</span>
+                <span class="nearby-name">${esc(name)}</span>
                 <span class="nearby-address">${esc(address)}</span>
               </a>
+              ${known ? '<button type="button" class="nearby-stamp" data-knownstamp aria-label="図鑑に登録済みです">済</button>' : ''}
             </li>`;
         }).join('')}</ul>`;
       }
@@ -2583,9 +2632,17 @@ function commentIcon() {
   </svg>`;
 }
 
+// お知らせのベル
+function bellIcon() {
+  return `<svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
+    <path d="M10 3a4.5 4.5 0 0 0-4.5 4.5c0 3-1.2 4.2-1.2 4.2h11.4s-1.2-1.2-1.2-4.2A4.5 4.5 0 0 0 10 3z"
+      fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M8.4 14.4a1.8 1.8 0 0 0 3.2 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+  </svg>`;
+}
+
 // 「…」（自分の投稿の操作メニュー）
-function kebabIcon() {
-  return `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+function kebabIcon() {  return `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
     <circle cx="4" cy="10" r="1.6" fill="currentColor"/>
     <circle cx="10" cy="10" r="1.6" fill="currentColor"/>
     <circle cx="16" cy="10" r="1.6" fill="currentColor"/>
@@ -3443,11 +3500,91 @@ function downloadFile(file) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/* ---------- アプリの更新 ---------- */
+/* ---------- お知らせ（更新内容の掲示板） ----------
+   新しい版を出すときは、この配列のいちばん上に1件足す。
+   version は sw.js の CACHE_NAME と app.js の APP_VERSION に合わせる。
+   未読の数は、いちばん上の version を読んだかどうかで数えている。 */
+const CHANGELOG = [
+  {
+    version: 'ramen-log-v35',
+    date: '2026-09-16',
+    title: 'お知らせと更新のお知らせ',
+    items: [
+      'ホームの右上にお知らせを追加。更新内容をここで見られるようにした',
+      '新しい版があるとき、アプリを開いたときに知らせるようにした',
+      '「まだ行っていない近くの店」で、図鑑にあるお店に「済」の判子を付けるようにした',
+    ],
+  },
+  {
+    version: 'ramen-log-v33',
+    date: '2026-09-16',
+    title: 'まだ行っていない近くの店',
+    items: [
+      '図鑑から、現在地の近くのラーメン屋を探せるようにした',
+      '図鑑にあるお店は区別して表示。1日3回まで',
+    ],
+  },
+  {
+    version: 'ramen-log-v32',
+    date: '2026-09-16',
+    title: 'おすすめの一杯',
+    items: [
+      '最近よかった系統から、しばらく食べていない一杯をギルチキが薦めるようにした',
+      'セリフから「くわしく見る」で候補の一覧へ飛べる',
+    ],
+  },
+  {
+    version: 'ramen-log-v31',
+    date: '2026-09-16',
+    title: '投稿の編集と削除',
+    items: [
+      '自分の投稿の右上に「⋯」を追加。そこから編集と削除ができる',
+      '記録の編集画面から住所も直せるようにした',
+    ],
+  },
+  {
+    version: 'ramen-log-v30',
+    date: '2026-09-16',
+    title: '共有した記録の更新',
+    items: [
+      '共有済みの記録を編集すると、みんなの記録にも反映されるようにした',
+      '設定に「アプリの更新」を追加',
+    ],
+  },
+  {
+    version: 'ramen-log-v29',
+    date: '2026-09-16',
+    title: '一緒に食べた人',
+    items: [
+      '記録に「一緒に食べた人」を付けられるようにした',
+      'プロフィールに「一緒に食べた記録」が並ぶようにした',
+    ],
+  },
+];
+
+async function newsReadVersion() {
+  const rec = await db.get('chiki', 'newsRead');
+  return rec?.version ?? null;
+}
+
+// 未読の件数。まだ一度も開いていないときは、古い記録を全部未読にしても
+// 驚かせるだけなので、いちばん新しい1件だけを未読として数える
+async function newsUnreadCount() {
+  const read = await newsReadVersion();
+  if (!read) return 1;
+  const index = CHANGELOG.findIndex((entry) => entry.version === read);
+  return index === -1 ? CHANGELOG.length : index;
+}
+
+async function markNewsRead() {
+  await db.put('chiki', { id: 'newsRead', version: CHANGELOG[0]?.version ?? APP_VERSION });
+}
+
+
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v34';
+const APP_VERSION = 'ramen-log-v35';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -3483,6 +3620,38 @@ async function applyUpdate() {
     }
   }
   location.reload();
+}
+
+// アプリを開いたときに一度だけ、新しい版が出ていないか静かに調べて知らせる。
+// 同じ版について何度も出すとうるさいので、一度断られたら次の版まで黙る。
+async function noticeUpdateOnLaunch() {
+  let newest = null;
+  try {
+    newest = await latestVersion();
+  } catch {
+    return; // オフラインなどで調べられなければ、何も出さない
+  }
+  if (!newest || newest === APP_VERSION) return;
+
+  const seen = await db.get('chiki', 'updateNoticeSeen');
+  if (seen?.version === newest) return;
+  await db.put('chiki', { id: 'updateNoticeSeen', version: newest });
+
+  const bar = document.createElement('div');
+  bar.className = 'update-bar';
+  bar.innerHTML = `
+    <span class="update-bar-text">アップデートがあります（${esc(newest.replace('ramen-log-', ''))}）</span>
+    <button type="button" class="update-bar-go" id="update-bar-go">更新する</button>
+    <button type="button" class="update-bar-close" id="update-bar-close" aria-label="閉じる">×</button>`;
+  document.body.appendChild(bar);
+
+  bar.querySelector('#update-bar-close').onclick = () => bar.remove();
+  bar.querySelector('#update-bar-go').onclick = async () => {
+    const go = bar.querySelector('#update-bar-go');
+    go.disabled = true;
+    go.textContent = '更新中…';
+    await applyUpdate();
+  };
 }
 
 async function renderSettings() {
@@ -4142,6 +4311,7 @@ const routes = [
   { path: /^\/user\/([\w@.-]+)$/, view: renderUser },
   { path: /^\/recommend$/, view: renderRecommend },
   { path: /^\/nearby$/, view: renderNearby },
+  { path: /^\/news$/, view: renderNews },
 ];
 
 // 進んだのか戻ったのかを見分けるため、ホームからの遠さを数えておく
@@ -4230,6 +4400,9 @@ loadChikiState().then(() => {
 
 window.addEventListener('hashchange', router);
 router();
+
+// 起動して少し落ち着いてから、新しい版が出ていないか調べる
+setTimeout(() => { noticeUpdateOnLaunch(); }, 1500);
 
 // オフラインでも開けるようにする仕組み（Service Worker）を登録
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
