@@ -952,10 +952,96 @@ let lastSavedId = null;
 // 「記録と同時に共有する」の状態を覚えておき、次に記録するときの初期値にする
 let shareByDefault = false;
 
+// メニュー名・店名から系統を推測する。上から順に見て、最初に当てはまったものを使う。
+// 当てはまらなければ「その他」。判定は自動のみで、手直しはできない
+// （外れることもあるが、多少ずれても「最近この系統が多い」の傾向をつかむには十分なため）
+const GENRE_RULES = [
+  ['二郎系', ['二郎', 'ジロー', 'ジロ系', 'マシマシ']],
+  ['家系', ['家系', 'いえけい']],
+  ['まぜそば・油そば', ['まぜそば', '油そば', 'あぶらそば']],
+  ['つけ麺', ['つけ麺', 'つけめん']],
+  ['担々麺', ['担々麺', '担担麺', 'タンタン']],
+  ['豚骨', ['豚骨', 'とんこつ']],
+  ['味噌', ['味噌', 'みそ']],
+  ['塩', ['塩', 'しお']],
+  ['醤油', ['醤油', 'しょうゆ']],
+];
+
+function genreOf(record, shop) {
+  const text = `${record.menu ?? ''} ${shop?.name ?? ''}`;
+  for (const [tag, words] of GENRE_RULES) {
+    if (words.some((w) => text.includes(w))) return tag;
+  }
+  return 'その他';
+}
+
+// 最近の記録から「今アツい系統」を見つけて、その中でしばらく食べていない
+// 高得点の一杯をひとつ選ぶ。材料が足りなかったり、良い候補がなければ null。
+function recommendOne(records, shopMap) {
+  if (records.length < 10) return null; // 傾向を見るにはまだ少ない
+
+  const byNewest2 = [...records].sort(byNewest);
+  const recent = byNewest2.slice(0, 30);
+
+  // 直近30杯を系統ごとに集計。3杯以上ある系統だけを候補にする
+  const stats = new Map(); // tag -> { sum, count }
+  for (const r of recent) {
+    const tag = genreOf(r, shopMap.get(r.shopId));
+    if (tag === 'その他') continue;
+    const s = stats.get(tag) ?? { sum: 0, count: 0 };
+    s.sum += r.score;
+    s.count += 1;
+    stats.set(tag, s);
+  }
+  const ranked = [...stats.entries()]
+    .filter(([, s]) => s.count >= 3)
+    .map(([tag, s]) => ({ tag, avg: s.sum / s.count, count: s.count }))
+    .sort((a, b) => b.avg - a.avg);
+  const hot = ranked[0];
+  if (!hot) return null;
+  const hotTag = hot.tag;
+
+  // そのアツい系統の中から、お店・メニューの組み合わせごとに最高点と最終来店日をまとめる
+  const candidates = new Map(); // "shopId::menu" -> { shopId, menu, score, date }
+  for (const r of records) {
+    if (genreOf(r, shopMap.get(r.shopId)) !== hotTag) continue;
+    const key = `${r.shopId}::${r.menu}`;
+    const c = candidates.get(key);
+    if (!c || r.score > c.score) candidates.set(key, { shopId: r.shopId, menu: r.menu, score: r.score, date: c?.date ?? r.date });
+    const cur = candidates.get(key);
+    if (r.date > cur.date) cur.date = r.date;
+  }
+
+  // しばらく（2週間以上）食べていないものの中から、一番点数が高かったものを選ぶ
+  const today = todayStr();
+  const gapDays = (date) => Math.floor((new Date(today) - new Date(date)) / 86400000);
+  const pool = [...candidates.values()]
+    .filter((c) => gapDays(c.date) >= 14)
+    .sort((a, b) => b.score - a.score);
+  const best = pool[0];
+  if (!best) return null;
+
+  const withShopName = (c) => ({ ...c, shopName: shopMap.get(c.shopId)?.name ?? '（不明なお店）', gapDays: gapDays(c.date) });
+  const shopNameText = shopMap.get(best.shopId)?.name ?? '（不明なお店）';
+  return {
+    tag: hotTag,
+    avg: hot.avg,
+    recentCount: hot.count,
+    shopId: best.shopId,
+    shopName: shopNameText,
+    menu: best.menu,
+    score: best.score,
+    gapDays: gapDays(best.date),
+    line: `最近${hotTag}が強いな。『${shopNameText}』の${best.menu}、そろそろどう？`,
+    // 一覧画面用に、候補全体（本命を除く）も点数順で持たせておく
+    alternates: pool.slice(1, 5).map(withShopName),
+  };
+}
+
 // ギルチキが話す一言を選ぶ。
 // 当てはまるセリフをすべて集めてから、その中からランダムに1つ選ぶ。
 // 優先順位をつけていないので、同じ一杯でも開くたびに違う一言になる。
-function chikiTalk(records, subject) {
+function chikiTalk(records, subject, extra = []) {
   if (!subject) return '一杯目、待ってる。';
 
   // まずは点数に応じた3つ
@@ -985,6 +1071,9 @@ function chikiTalk(records, subject) {
   if (hour >= 5 && hour < 10) pool.push('朝から行ったのか。');
   if (hour >= 22 || hour < 2) pool.push('こんな時間に……ギルティ。');
   if (hour >= 2 && hour < 5) pool.push('もう朝じゃないか。');
+
+  // おすすめの一杯があれば、他の一言と同じ扱いで混ぜる（毎回出るわけではない）
+  pool.push(...extra);
 
   return pick(pool);
 }
@@ -1016,7 +1105,9 @@ async function renderHome() {
   const justSaved = lastSavedId ? records.find((r) => r.id === lastSavedId) : null;
   lastSavedId = null;
   const subject = justSaved ?? (newest.length ? pick(newest.slice(0, 10)) : null);
-  const talk = chikiTalk(records, subject);
+  const rec = recommendOne(records, shopMap);
+  const talk = chikiTalk(records, subject, rec ? [rec.line] : []);
+  const showRecLink = Boolean(rec) && talk === rec.line;
   const talkSub = subject
     ? `${shopName(shopMap, subject.shopId)}・${subject.score}点`
     : '記録するボタンから始められる';
@@ -1047,6 +1138,7 @@ async function renderHome() {
           </span>
         </span>
       </button>
+      ${showRecLink ? `<a class="chiki-reco" href="#/recommend">くわしく見る ›</a>` : ''}
 
       <nav class="tickets">
         <a class="ticket ticket-main" href="#/new">
@@ -1105,6 +1197,45 @@ async function renderHome() {
       $('#feed-ticket')?.classList.add('has-new');
     });
   }
+}
+
+/* ===================== おすすめの一杯 ===================== */
+
+async function renderRecommend() {
+  const { records, shopMap } = await loadAll();
+  const rec = recommendOne(records, shopMap);
+
+  if (!rec) {
+    app.innerHTML = header('おすすめの一杯', { back: '#/' })
+      + '<p class="empty">今はおすすめできる一杯がありません。記録が増えると出てきます。</p>';
+    return;
+  }
+
+  app.innerHTML = header('おすすめの一杯', { back: '#/' }) + `
+    <section class="reco">
+      <p class="reco-tag">最近アツい系統：${esc(rec.tag)}<small>（直近30杯の平均 ${rec.avg.toFixed(0)}点・${rec.recentCount}杯）</small></p>
+
+      <a class="reco-main" href="#/shop/${rec.shopId}">
+        <span class="reco-shop">${esc(rec.shopName)}</span>
+        <span class="reco-menu">${esc(rec.menu)}</span>
+        <span class="reco-meta">最高${rec.score}点・${rec.gapDays}日前が最後</span>
+      </a>
+
+      ${rec.alternates.length ? `
+        <h2 class="section-title">同じ系統の他の候補</h2>
+        <ul class="reco-list">
+          ${rec.alternates.map((c) => `
+            <li class="reco-item">
+              <a href="#/shop/${c.shopId}">
+                <span class="reco-shop">${esc(c.shopName)}</span>
+                <span class="reco-menu">${esc(c.menu)}</span>
+                <span class="reco-meta">最高${c.score}点・${c.gapDays}日前が最後</span>
+              </a>
+            </li>`).join('')}
+        </ul>` : ''}
+
+      <p class="hint">系統はメニュー名とお店の名前から自動で判定しています。ずれていることもあります。</p>
+    </section>`;
 }
 
 /* ===================== ガチャ（衣装） ===================== */
@@ -3159,7 +3290,7 @@ function downloadFile(file) {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v31';
+const APP_VERSION = 'ramen-log-v32';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -3852,6 +3983,7 @@ const routes = [
   { path: /^\/feed$/, view: renderFeed },
   { path: /^\/post\/([\w-]+)$/, view: renderPost },
   { path: /^\/user\/([\w@.-]+)$/, view: renderUser },
+  { path: /^\/recommend$/, view: renderRecommend },
 ];
 
 // 進んだのか戻ったのかを見分けるため、ホームからの遠さを数えておく
