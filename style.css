@@ -1223,6 +1223,89 @@ textarea { resize: vertical; }
   font-size: 12px;
 }
 
+/* ---------- 一緒に食べた人 ---------- */
+
+/* 記録画面で選ぶところ。押すたびに付け外しする */
+.with-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.with-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 6px 12px 6px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.with-chip .chip-avatar {
+  width: 26px;
+  height: 26px;
+  font-size: 12px;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.with-chip.is-on {
+  border-color: var(--yolk);
+  background: rgba(242, 160, 7, 0.12);
+  color: var(--cream);
+  font-weight: 600;
+}
+
+.with-chip.is-on .chip-avatar { opacity: 1; }
+
+.wc-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 投稿に出る「〇〇と一緒に」の行 */
+.post-with {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.post-with-one {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 45%;
+  color: var(--cream);
+  text-decoration: none;
+}
+
+.post-with-one span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.post-with .chip-avatar {
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+}
+
+/* 「と一緒に」は最後の人のすぐ後ろに続けたいので、余白を詰める */
+.post-with-tail { margin-left: -2px; }
+
 .plc-body {
   display: flex;
   flex-direction: column;

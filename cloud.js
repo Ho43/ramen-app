@@ -79,6 +79,14 @@ export async function getProfile(uid) {
   return snap.exists() ? snap.data() : null;
 }
 
+// 身内のメンバー一覧。「一緒に食べた人」を選ぶときに使う。
+// users を読む許可はルール側ですでに身内全員に出ているので、
+// 追加のルールは要らない（allow read は1件取得と一覧取得の両方を含む）。
+export async function getMembers() {
+  const snap = await getDocs(collection(db, 'users'));
+  return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+}
+
 /* ---------- 共有された記録 ---------- */
 
 // 投稿するときに、書いた人の名前とアイコンも一緒に入れておく。
@@ -187,6 +195,15 @@ export async function getRecentPosts(max = 30) {
 // （日付での並べ替えまでFirestoreに任せると、別途索引の作成が必要になるため）
 export async function getPostsByUser(uid) {
   const snap = await getDocs(query(collection(db, 'posts'), where('uid', '==', uid), limit(200)));
+  const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  posts.sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
+  return posts;
+}
+
+// その人が「一緒に食べた人」として名前を出された記録。
+// 自分が共有したものではないので、getPostsByUser とは別に取る。
+export async function getPostsTaggedWith(uid) {
+  const snap = await getDocs(query(collection(db, 'posts'), where('withUids', 'array-contains', uid), limit(200)));
   const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   posts.sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
   return posts;

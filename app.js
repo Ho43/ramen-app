@@ -1709,6 +1709,13 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
     ?? (/^\d{4}-\d{2}-\d{2}$/.test(presetDate ?? '') ? presetDate : todayStr());
   const currentPhotoUrl = record ? await getPhotoUrl(record.photoId) : (saved0?.previewUrl ?? null);
 
+  // 一緒に食べた人。ログインしているときだけ選べる
+  const members = me.user ? await loadMembers() : [];
+  // 今この記録に付いている人。もう抜けた人が残らないよう、一覧にいる人だけに絞る
+  const withUids = new Set(
+    (record?.withUids ?? saved0?.withUids ?? []).filter((uid) => members.some((m) => m.uid === uid)),
+  );
+
   app.innerHTML = header(isEdit ? '記録を編集' : '記録する', { back: 'history' }) + `
     <form class="form" id="rec-form" novalidate>
       <div class="field">
@@ -1770,6 +1777,19 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
         <label for="f-comment">一言コメント<small>（なくても記録できます）</small></label>
         <textarea id="f-comment" rows="3" maxlength="200" placeholder="その時感じたこと">${esc(record?.comment ?? saved0?.comment)}</textarea>
       </div>
+
+      ${members.length ? `
+      <div class="field">
+        <span class="label">一緒に食べた人<small>（共有すると相手の記録にも並びます）</small></span>
+        <div class="with-pick" id="f-with">
+          ${members.map((m) => `
+            <button type="button" class="with-chip${withUids.has(m.uid) ? ' is-on' : ''}"
+              data-with="${m.uid}" aria-pressed="${withUids.has(m.uid)}">
+              ${avatarChip(m.nickname, m.avatar)}
+              <span class="wc-name">${esc(m.nickname ?? '名無し')}</span>
+            </button>`).join('')}
+        </div>
+      </div>` : ''}
 
       ${!isEdit && me.user ? `
       <label class="check-row">
@@ -1900,6 +1920,19 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
     keepDraft();
   };
 
+  // --- 一緒に食べた人（押すたびに付け外し） ---
+  $('#f-with')?.addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-with]');
+    if (!chip) return;
+    const uid = chip.dataset.with;
+    const on = !withUids.has(uid);
+    if (on) withUids.add(uid); else withUids.delete(uid);
+    chip.classList.toggle('is-on', on);
+    chip.setAttribute('aria-pressed', String(on));
+    tap(chip);
+    keepDraft();
+  });
+
   // --- 書きかけを覚える（新規記録のときだけ） ---
   function keepDraft() {
     if (isEdit) return;
@@ -1911,6 +1944,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       date: $('#f-date').value,
       score: Number(scoreRange.value),
       comment: $('#f-comment').value,
+      withUids: [...withUids],
       share: $('#f-share')?.checked ?? false,
       photoBlob: photoChange instanceof Blob ? photoChange : null,
       previewUrl,
@@ -1985,6 +2019,9 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
         score: Number(scoreRange.value),
         comment,
         photoId,
+        withUids: [...withUids],
+        // 共有中の印は編集しても引き継ぐ（入れ忘れると共有していないことになってしまう）
+        postId: record?.postId ?? null,
         createdAt: record?.createdAt ?? Date.now(),
         updatedAt: Date.now(),
       };
@@ -2017,6 +2054,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
             date: saved.date,
             score: saved.score,
             comment: saved.comment ?? '',
+            withUids: saved.withUids ?? [],
             photo: await photoForShare(saved.photoId),
           });
           await db.put('records', { ...saved, postId });
@@ -2137,6 +2175,28 @@ async function ensureProfiles(uids) {
   return true;
 }
 
+/* ---------- 身内のメンバー一覧（「一緒に食べた人」を選ぶため） ---------- */
+
+// 一度読んだら覚えておく。記録画面を開くたびに取りに行かなくて済む。
+// 新しい人が入ったときのために、アプリを開き直すと読み直しになる。
+let memberCache = null;
+
+async function loadMembers() {
+  if (memberCache) return memberCache;
+  if (!me.user) return [];
+  try {
+    const list = await cloud.getMembers();
+    // 自分は「一緒に食べた人」に選べないので、ここで外しておく
+    memberCache = list.filter((m) => m.uid !== me.user.uid);
+    // ついでにプロフィールも覚えておくと、名前やアイコンを引くのが速くなる
+    memberCache.forEach((m) => { if (!profileCache.has(m.uid)) profileCache.set(m.uid, m); });
+    return memberCache;
+  } catch (err) {
+    console.error(err);
+    return []; // 読めなくても記録そのものは続けられるようにする
+  }
+}
+
 // ボタンを押した感触。Androidは振動し、iPhoneはWebに振動の仕組みがないため
 // 押し込むような動き（CSSの is-pop）で代える。
 //
@@ -2196,6 +2256,20 @@ function postCard(post, { withLastComment = true } = {}) {
        </button>`
     : '';
   const comment = (post.comment ?? '').trim();
+
+  // 一緒に食べた人。名前は投稿時のものではなく、読めていれば最新のものを使う
+  const withUids = post.withUids ?? [];
+  const withLine = withUids.length
+    ? `<div class="post-with">
+         ${withUids.map((uid) => `
+           <a class="post-with-one" href="#/user/${uid}">
+             ${avatarFor(uid, null, null)}
+             <span>${esc(nameFor(uid, null))}</span>
+           </a>`).join('')}
+         <span class="post-with-tail">と一緒に</span>
+       </div>`
+    : '';
+
   return `
     <li class="post" data-post-id="${post.id}">
       <div class="post-head">
@@ -2214,6 +2288,7 @@ function postCard(post, { withLastComment = true } = {}) {
         </div>
         <span class="post-score${post.score >= GUILTY ? ' is-guilty' : ''}">${post.score}<small>点</small></span>
       </a>
+      ${withLine}
       <div class="post-foot">
         ${guiltyButton(post)}
         <a class="icon-btn" href="#/post/${post.id}?comment=1" aria-label="コメントを書く">
@@ -2276,7 +2351,7 @@ async function renderFeed() {
       drawFeed(posts);
       // 投稿に書かれた名前やアイコンは投稿時点のもの。
       // 最新のプロフィールが読めたら、もう一度描き直す
-      const uids = posts.flatMap((p) => [p.uid, p.lastComment?.uid]);
+      const uids = posts.flatMap((p) => [p.uid, p.lastComment?.uid, ...(p.withUids ?? [])]);
       if (await ensureProfiles(uids)) drawFeed(posts);
     },
     (err) => {
@@ -2539,12 +2614,15 @@ async function renderPost({ id, query }) {
 
   postStop.push(cloud.watchPost(
     id,
-    (post) => {
+    async (post) => {
       if (!document.body.contains(slot)) return;
       if (!post) {
         slot.innerHTML = '<p class="empty">この記録は削除されました。</p>';
         return;
       }
+      // 一緒に食べた人の名前を出すために、先にプロフィールを読んでおく
+      await ensureProfiles(post.withUids ?? []);
+      if (!document.body.contains(slot)) return;
       thisPost = post;
       const mine = me.user.uid === post.uid;
       slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false })}</ul>`
@@ -2750,8 +2828,13 @@ async function renderUser({ id }) {
 
   let profile = null;
   let posts = [];
+  let tagged = []; // この人が「一緒に食べた人」として出ている、他の人の記録
   try {
-    [profile, posts] = await Promise.all([cloud.getProfile(id), cloud.getPostsByUser(id)]);
+    [profile, posts, tagged] = await Promise.all([
+      cloud.getProfile(id),
+      cloud.getPostsByUser(id),
+      cloud.getPostsTaggedWith(id),
+    ]);
   } catch (err) {
     console.error(err);
     app.innerHTML = header('プロフィール', backTo)
@@ -2806,6 +2889,10 @@ async function renderUser({ id }) {
       ${!showZukan && !showCalendar
         ? '<p class="empty">このユーザーは図鑑とカレンダーを公開していません。</p>'
         : ''}
+
+      ${tagged.length ? `
+        <h2 class="section-title">一緒に食べた記録</h2>
+        <ul class="post-list" id="user-tagged"></ul>` : ''}
     </section>`;
 
   // この人のお知らせを受け取るかどうかを切り替える
@@ -2833,6 +2920,16 @@ async function renderUser({ id }) {
   if (showZukan) renderUserZukan($('#user-zukan'), posts);
   if (showCalendar) renderUserCalendar($('#user-cal'), posts);
 
+  // 一緒に食べた記録。書いたのは別の人なので、その人の名前とアイコンを先に読む
+  const taggedSlot = $('#user-tagged');
+  if (taggedSlot) {
+    const draw = () => {
+      if (!document.body.contains(taggedSlot)) return;
+      taggedSlot.innerHTML = tagged.map((p) => postCard(p, { withLastComment: false })).join('');
+    };
+    draw();
+    if (await ensureProfiles(tagged.flatMap((p) => [p.uid, ...(p.withUids ?? [])]))) draw();
+  }
 }
 
 // 共有された記録をお店ごとにまとめて図鑑にする
@@ -2980,11 +3077,6 @@ async function renderSettings() {
       <p>身内で記録を見せ合う機能です。まずログインしてください。</p>
       <a class="btn btn-ghost btn-block" href="#/account">アカウント</a>
 
-      <h2 class="section-title">アプリの更新</h2>
-      <p class="hint">新しい版が出ているか調べます。ホーム画面のアイコンを追加し直す必要はありません（追加し直すと端末の記録が消えます）。</p>
-      <button type="button" class="btn btn-ghost btn-block" id="check-update">更新を確認</button>
-      <p class="hint" id="update-state"></p>
-
       <h2 class="section-title">共有した記録から復元</h2>
       <p class="hint">ホーム画面のアイコンを消して入れ直すと、端末の中の記録は消えてしまいます。みんなに共有した分だけは、ここから端末に戻せます。</p>
       <button type="button" class="btn btn-ghost btn-block" id="restore-shared">共有した記録を端末に戻す</button>
@@ -3005,23 +3097,6 @@ async function renderSettings() {
       if (usage != null) $('#usage').textContent = `　使用容量 約${(usage / 1024 / 1024).toFixed(1)}MB`;
     })
     .catch(() => {});
-
-  $('#check-update').onclick = async () => {
-    const btn = $('#check-update');
-    const state = $('#update-state');
-    btn.disabled = true;
-    state.textContent = '確認しています…';
-    const result = await checkForUpdate();
-    if (result === 'updated') {
-      state.textContent = '新しい版が見つかりました。読み込み直します…';
-      setTimeout(() => location.reload(), 900);
-      return;
-    }
-    state.textContent = result === 'latest'
-      ? 'すでに最新です。'
-      : '確認できませんでした。電波の良い場所でお試しください。';
-    btn.disabled = false;
-  };
 
   // 共有した記録を、端末の記録として作り直す
   $('#restore-shared').onclick = async () => {
@@ -3231,6 +3306,7 @@ function setupShare(record, shopNameText, shopAddressText) {
           date: record.date,
           score: record.score,
           comment: record.comment ?? '',
+          withUids: record.withUids ?? [],
           photo: await photoForShare(record.photoId),
         });
         await db.put('records', { ...record, postId });
@@ -3652,61 +3728,7 @@ loadChikiState().then(() => {
 window.addEventListener('hashchange', router);
 router();
 
-// オフラインでも開けるようにする仕組み（Service Worker）を登録。
-// あとから「更新を確認」できるよう、登録した結果を覚えておく。
-let swRegistration = null;
+// オフラインでも開けるようにする仕組み（Service Worker）を登録
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('./sw.js')
-    .then((reg) => { swRegistration = reg; })
-    .catch((err) => console.warn('Service Worker 登録失敗', err));
-}
-
-// 新しい版があるか調べて、あれば取り込んで開き直す。
-// 戻り値は 'updated'（新しくなった）/ 'latest'（すでに最新）/ 'unavailable'（仕組みが使えない）
-async function checkForUpdate() {
-  if (!swRegistration) return 'unavailable';
-  // GitHub Pages側の配信キャッシュを避けるため、時刻を付けて必ず取りに行く
-  const stamp = Date.now();
-  let latest = null;
-  try {
-    const res = await fetch(`./sw.js?t=${stamp}`, { cache: 'no-store' });
-    latest = await res.text();
-  } catch (err) {
-    console.error(err);
-    return 'unavailable';
-  }
-
-  // 今動いている版と中身を比べる
-  let current = null;
-  try {
-    const cache = await caches.open('ramen-log-check');
-    const hit = await cache.match('./sw-current');
-    current = hit ? await hit.text() : null;
-    await cache.put('./sw-current', new Response(latest));
-  } catch (err) {
-    console.error(err);
-  }
-
-  await swRegistration.update();
-
-  // 中身が変わっていなければ、ファイルも変わっていない
-  if (current !== null && current === latest) return 'latest';
-
-  // 新しい版を取り込む。待機している新しいSWがあれば、すぐ交代させる
-  if (swRegistration.waiting) swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
-
-  // 画面のファイルもキャッシュを無視して取り直す。
-  // どのキャッシュに入れるかは sw.js 側が決めているので、
-  // 'ramen-log-v' で始まるものをそのまま使う
-  try {
-    const names = (await caches.keys()).filter((k) => k.startsWith('ramen-log-v'));
-    for (const name of names) {
-      const cache = await caches.open(name);
-      await cache.addAll(['./', './index.html', './app.js', './style.css', './cloud.js', './db.js']
-        .map((u) => new Request(u, { cache: 'reload' })));
-    }
-  } catch (err) {
-    console.error(err);
-  }
-  return 'updated';
+  navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('Service Worker 登録失敗', err));
 }
