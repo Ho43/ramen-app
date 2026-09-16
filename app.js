@@ -2645,7 +2645,11 @@ async function renderPost({ id, query }) {
       thisPost = post;
       const mine = me.user.uid === post.uid;
       slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false })}</ul>`
-        + (mine ? '<button type="button" class="btn btn-danger btn-block" id="post-delete">この投稿を削除</button>' : '');
+        + (mine ? `
+          <button type="button" class="btn btn-ghost btn-block" id="post-address">
+            住所を${post.shopAddress ? '変更' : '登録'}
+          </button>
+          <button type="button" class="btn btn-danger btn-block" id="post-delete">この投稿を削除</button>` : '');
       restorePop(slot);
       const btn = slot.querySelector('[data-guilty]');
       if (btn) {
@@ -2660,6 +2664,25 @@ async function renderPost({ id, query }) {
             btn.classList.toggle('is-on', !on);
             toast('うまくいきませんでした');
           }
+        };
+      }
+      const addressBtn = slot.querySelector('#post-address');
+      if (addressBtn) {
+        addressBtn.onclick = async () => {
+          const address = prompt('お店の住所を入力してください（空にすると削除します）', post.shopAddress ?? '')?.trim();
+          if (address === undefined) return; // キャンセル
+          addressBtn.disabled = true;
+          try {
+            // お店自体の住所も直しておく。次にこのお店で記録するときにも引き継がれる
+            const found = await shopForPost(post.id);
+            if (found) await db.put('shops', { ...found.shop, address });
+            await cloud.updatePost(post.id, { shopAddress: address });
+            toast(address ? '住所を保存しました' : '住所を削除しました');
+          } catch (err) {
+            console.error(err);
+            toast(shareErrorMessage(err));
+          }
+          addressBtn.disabled = false;
         };
       }
       const delBtn = slot.querySelector('#post-delete');
@@ -3074,7 +3097,7 @@ function downloadFile(file) {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v29';
+const APP_VERSION = 'ramen-log-v30';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -3441,6 +3464,16 @@ async function clearLocalPostLink(postId) {
   const records = await db.getAll('records');
   const match = records.find((r) => r.postId === postId);
   if (match) await db.put('records', { ...match, postId: null });
+}
+
+// 共有された投稿1件から、端末側の記録とお店を逆引きする。
+// 端末のデータが入れ替わっていた場合は見つからず null になる。
+async function shopForPost(postId) {
+  const [records, shops] = await Promise.all([db.getAll('records'), db.getAll('shops')]);
+  const record = records.find((r) => r.postId === postId);
+  if (!record) return null;
+  const shop = shops.find((s) => s.id === record.shopId);
+  return shop ? { record, shop } : null;
 }
 
 function shareErrorMessage(err) {
