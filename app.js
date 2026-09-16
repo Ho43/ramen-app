@@ -654,7 +654,6 @@ const noImage = '<span class="noimage">No Image</span>';
 /* ===================== マスコット「ギルチキ」 ===================== */
 
 const GUILTY = 95; // この点数以上が「ギルティ」
-
 // 点数を4段階に分ける
 function faceTier(score) {
   if (score >= GUILTY) return 3; // ギルティ
@@ -2065,6 +2064,26 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
         }
       }
 
+      // 共有済みの記録を編集したときは、みんなの記録の側も書き換える。
+      // ここで失敗しても端末の記録はもう保存できているので、知らせるだけにする。
+      if (isEdit && saved.postId) {
+        try {
+          await cloud.updatePost(saved.postId, {
+            shopName: name,
+            shopAddress: (shop ?? shops.find((s) => s.id === shopId))?.address ?? '',
+            menu: saved.menu,
+            date: saved.date,
+            score: saved.score,
+            comment: saved.comment ?? '',
+            withUids: saved.withUids ?? [],
+            photo: await photoForShare(saved.photoId),
+          });
+        } catch (err) {
+          console.error(err);
+          toast('変更は保存しましたが、共有側に反映できませんでした');
+        }
+      }
+
       if (saved.score >= GUILTY) {
         await guiltyFlash(isEdit ? `${name}・${saved.score}点` : `${name}（${nth}回目）・${saved.score}点`);
       }
@@ -3051,6 +3070,48 @@ function downloadFile(file) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/* ---------- アプリの更新 ---------- */
+
+// sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
+// 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
+const APP_VERSION = 'ramen-log-v29';
+
+// GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
+// キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
+async function latestVersion() {
+  const res = await fetch(`./sw.js?t=${Date.now()}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('sw.js を読めませんでした');
+  const text = await res.text();
+  return text.match(/CACHE_NAME\s*=\s*'([^']+)'/)?.[1] ?? null;
+}
+
+// 新しい Service Worker に入れ替えてから開き直す。
+// sw.js は install のときに skipWaiting() を呼ぶので、
+// 取ってこられさえすればそのまま新しいほうが使われる。
+async function applyUpdate() {
+  const reg = await navigator.serviceWorker?.getRegistration();
+  if (reg) {
+    try {
+      await reg.update();
+    } catch (err) {
+      console.error(err);
+    }
+    const worker = reg.installing ?? reg.waiting;
+    if (worker) {
+      // 入れ替わるまで少し待つ。待ちすぎないよう5秒で切り上げる
+      await new Promise((resolve) => {
+        const check = () => {
+          if (worker.state === 'activated' || worker.state === 'redundant') resolve();
+        };
+        worker.addEventListener('statechange', check);
+        check();
+        setTimeout(resolve, 5000);
+      });
+    }
+  }
+  location.reload();
+}
+
 async function renderSettings() {
   const { shops, records } = await loadAll();
 
@@ -3081,6 +3142,10 @@ async function renderSettings() {
       <p class="hint">ホーム画面のアイコンを消して入れ直すと、端末の中の記録は消えてしまいます。みんなに共有した分だけは、ここから端末に戻せます。</p>
       <button type="button" class="btn btn-ghost btn-block" id="restore-shared">共有した記録を端末に戻す</button>
 
+      <h2 class="section-title">アプリの更新</h2>
+      <p class="hint" id="update-state">今の版：${APP_VERSION}</p>
+      <button type="button" class="btn btn-ghost btn-block" id="update-btn">最新版があるか確認</button>
+
       <h2 class="section-title">コード</h2>
       <div class="field">
         <label for="redeem-code">コードを入力</label>
@@ -3095,6 +3160,53 @@ async function renderSettings() {
   navigator.storage?.estimate?.()
     .then(({ usage }) => {
       if (usage != null) $('#usage').textContent = `　使用容量 約${(usage / 1024 / 1024).toFixed(1)}MB`;
+    })
+    .catch(() => {});
+
+  // --- アプリの更新 ---
+  // ボタンは最新版でも消さない。押せば今の状態がその場で分かるようにしてある。
+  const updateBtn = $('#update-btn');
+  const updateState = $('#update-state');
+
+  updateBtn.onclick = async () => {
+    updateBtn.disabled = true;
+    updateState.textContent = '確認しています…';
+    let newest = null;
+    try {
+      newest = await latestVersion();
+    } catch (err) {
+      console.error(err);
+      updateState.textContent = '確認できませんでした。電波の良い場所でもう一度お試しください。';
+      updateBtn.disabled = false;
+      return;
+    }
+
+    if (!newest || newest === APP_VERSION) {
+      updateState.textContent = `最新版です（${APP_VERSION}）`;
+      updateBtn.disabled = false;
+      return;
+    }
+
+    updateState.textContent = `新しい版があります（${APP_VERSION} → ${newest}）`;
+    if (!confirm(`新しい版（${newest}）があります。更新して開き直しますか？\n記録はそのまま残ります。`)) {
+      updateBtn.disabled = false;
+      return;
+    }
+    updateState.textContent = '更新しています…';
+    await applyUpdate();
+  };
+
+  // 開いたときに一度だけ静かに調べておく。
+  // 失敗しても何も出さない（オフラインのときに驚かせないため）
+  latestVersion()
+    .then((newest) => {
+      if (!document.body.contains(updateState)) return;
+      if (newest && newest !== APP_VERSION) {
+        updateState.textContent = `新しい版があります（${APP_VERSION} → ${newest}）`;
+        updateBtn.textContent = '最新版に更新する';
+        updateBtn.classList.remove('btn-ghost');
+        updateBtn.classList.add('btn-primary');
+      }
     })
     .catch(() => {});
 

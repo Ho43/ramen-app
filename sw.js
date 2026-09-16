@@ -67,6 +67,10 @@ self.addEventListener('fetch', (event) => {
 
   if (new URL(request.url).origin !== location.origin) return;
 
+  // 更新の確認で読む sw.js はキャッシュに残さない。
+  // 毎回ちがうURL（?t=…）で来るので、貯めても使い道がないため。
+  if (new URL(request.url).pathname.endsWith('/sw.js')) return;
+
   event.respondWith(
     fetch(request)
       .then((response) => {

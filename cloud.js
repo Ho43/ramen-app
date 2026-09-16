@@ -104,6 +104,13 @@ export async function deletePost(id) {
   await deleteDoc(doc(db, 'posts', id));
 }
 
+// 共有済みの記録を編集したときに、みんなの記録の側も書き換える。
+// 投稿した人・投稿日時・ギルティ・コメント数は触らないので、
+// 押されたギルティが消えたり、順番が入れ替わったりすることはない。
+export async function updatePost(id, fields) {
+  await updateDoc(doc(db, 'posts', id), fields);
+}
+
 export async function getPost(id) {
   const snap = await getDoc(doc(db, 'posts', id));
   return snap.exists() ? { id: snap.id, ...snap.data() } : null;
