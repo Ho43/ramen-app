@@ -670,6 +670,11 @@ const PLACES_API_KEY = 'AIzaSyBhWQ4BKaWDGpTDiIsHIFqa0TvKSSVBNyM';
 // 課金が発生しないよう、呼び出し回数をアプリ側でも絞っておく（Google側の割り当てとは別の保険）。
 // 場所を変えて何度か試せるよう、1回きりではなく少し余裕を持たせている
 const NEARBY_DAILY_LIMIT = 3;
+
+// 通知（プッシュ通知）用。Firebaseコンソール →「プロジェクトの設定」→
+// 「Cloud Messaging」タブ →「ウェブ構成」の「鍵ペアを生成」で発行される文字列。
+// まだ発行していない・貼り替えていない間は、通知を有効にするボタンを出さない
+const VAPID_KEY = 'BGvdofOsFN5YEP27w8EaxpPeaCVHn0o53B7DgqBNI_d-w3kw6_-VbQgZrRoJttBxSe-2anlWw8N8jU-V2nArgFU';
 // 点数を4段階に分ける
 function faceTier(score) {
   if (score >= GUILTY) return 3; // ギルティ
@@ -3706,7 +3711,7 @@ async function markNewsRead() {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v37';
+const APP_VERSION = 'ramen-log-v38';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -3806,6 +3811,16 @@ async function renderSettings() {
       <p class="hint">ホーム画面のアイコンを消して入れ直すと、端末の中の記録は消えてしまいます。みんなに共有した分だけは、ここから端末に戻せます。</p>
       <button type="button" class="btn btn-ghost btn-block" id="restore-shared">共有した記録を端末に戻す</button>
 
+      ${me.user ? `
+      <h2 class="section-title">通知</h2>
+      <p class="hint" id="notif-state">確認しています…</p>
+      <button type="button" class="btn btn-ghost btn-block" id="notif-enable" hidden>通知を有効にする</button>
+      <div id="notif-toggles" hidden>
+        <label class="check-row"><input type="checkbox" id="notif-post"> 身内が新しく共有したとき</label>
+        <label class="check-row"><input type="checkbox" id="notif-guilty"> 自分の投稿にギルティが付いたとき</label>
+        <label class="check-row"><input type="checkbox" id="notif-comment"> 自分の投稿にコメントがついたとき</label>
+      </div>` : ''}
+
       <h2 class="section-title">アプリの更新</h2>
       <p class="hint" id="update-state">今の版：${APP_VERSION}</p>
       <button type="button" class="btn btn-ghost btn-block" id="update-btn">最新版があるか確認</button>
@@ -3826,6 +3841,77 @@ async function renderSettings() {
       if (usage != null) $('#usage').textContent = `　使用容量 約${(usage / 1024 / 1024).toFixed(1)}MB`;
     })
     .catch(() => {});
+
+  // --- 通知 ---
+  if (me.user) {
+    const notifState = $('#notif-state');
+    const notifEnable = $('#notif-enable');
+    const notifToggles = $('#notif-toggles');
+    const TOKEN_KEY = 'ramen-log:fcm-token';
+
+    const supported = VAPID_KEY !== '__VAPID_KEY__' && await cloud.notificationsSupported();
+    const savedToken = localStorage.getItem(TOKEN_KEY);
+
+    if (!supported) {
+      notifState.textContent = VAPID_KEY === '__VAPID_KEY__'
+        ? '準備中です（設定がまだ完了していません）'
+        : 'この端末・この開き方では通知に対応していません。ホーム画面に追加したアイコンから開いてください。';
+    } else if (savedToken) {
+      notifState.textContent = '有効です';
+      notifToggles.hidden = false;
+    } else if (Notification.permission === 'denied') {
+      notifState.textContent = 'ブロックされています。iPhoneの「設定」アプリ→このアプリの通知から許可してください。';
+    } else {
+      notifState.textContent = 'まだ有効にしていません';
+      notifEnable.hidden = false;
+    }
+
+    notifEnable.onclick = async () => {
+      notifEnable.disabled = true;
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        const token = await cloud.enableNotifications(VAPID_KEY, reg);
+        if (!token) {
+          notifState.textContent = '許可されませんでした';
+          notifEnable.disabled = false;
+          return;
+        }
+        await cloud.saveFcmToken(me.user.uid, token);
+        localStorage.setItem(TOKEN_KEY, token);
+        notifState.textContent = '有効です';
+        notifEnable.hidden = true;
+        notifToggles.hidden = false;
+      } catch (err) {
+        console.error(err);
+        toast('通知を設定できませんでした');
+        notifEnable.disabled = false;
+      }
+    };
+
+    // どの通知を受け取るか。設定していない人は「受け取る」扱いにする
+    [
+      ['notif-post', 'notifyOnPost'],
+      ['notif-guilty', 'notifyOnGuilty'],
+      ['notif-comment', 'notifyOnComment'],
+    ].forEach(([elId, field]) => {
+      const checkbox = $(`#${elId}`);
+      checkbox.checked = me.profile?.[field] !== false;
+      checkbox.onchange = async () => {
+        const value = checkbox.checked;
+        checkbox.disabled = true;
+        try {
+          await cloud.saveProfile(me.user.uid, { [field]: value });
+          me.profile = { ...me.profile, [field]: value };
+          profileCache.set(me.user.uid, me.profile);
+        } catch (err) {
+          console.error(err);
+          checkbox.checked = !value;
+          toast('保存できませんでした');
+        }
+        checkbox.disabled = false;
+      };
+    });
+  }
 
   // --- アプリの更新 ---
   // ボタンは最新版でも消さない。押せば今の状態がその場で分かるようにしてある。
