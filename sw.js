@@ -11,7 +11,7 @@
 // これによって、ログイン画面を開くたびに時間がかかるのを防ぐ。
 // =====================================================
 
-const CACHE_NAME = 'ramen-log-v36';
+const CACHE_NAME = 'ramen-log-v37';
 const FIREBASE_CACHE = 'ramen-log-firebase-v1';
 const APP_FILES = [
   './',
@@ -71,8 +71,13 @@ self.addEventListener('fetch', (event) => {
   // 毎回ちがうURL（?t=…）で来るので、貯めても使い道がないため。
   if (new URL(request.url).pathname.endsWith('/sw.js')) return;
 
+  // よく変わるファイル（コードや見た目）だけ、ブラウザのキャッシュも無視して必ず取りに行く。
+  // 画像やアイコンはめったに変わらないので、今まで通りキャッシュに任せて速さを優先する
+  const path = new URL(request.url).pathname;
+  const alwaysFresh = /\.(html|js|css)$|\/$/.test(path);
+
   event.respondWith(
-    fetch(request)
+    fetch(request, alwaysFresh ? { cache: 'no-store' } : {})
       .then((response) => {
         const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
