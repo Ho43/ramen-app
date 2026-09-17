@@ -3394,31 +3394,24 @@ async function renderUser({ id }) {
   const followingCount = theirFollows.length;
   const followerCount = members.filter((m) => (m.follows ?? []).includes(id)).length;
 
-  app.innerHTML = header(name, backTo) + `
+  app.innerHTML = header('プロフィール', backTo) + `
     <section class="user">
       <div class="user-head">
         <span class="user-avatar"><img src="${avatarOf(profile?.avatar)}" alt=""></span>
         <div class="user-lines">
           <h2 class="user-name">${esc(name)}${badgeImg(badgeTier)}</h2>
           ${bio ? `<p class="user-bio">${esc(bio)}</p>` : ''}
+          <div class="follow-stats">
+            <a href="#/follows/${id}?type=following"><strong>${followingCount}</strong>フォロー中</a>
+            <a href="#/follows/${id}?type=followers"><strong>${followerCount}</strong>フォロワー</a>
+          </div>
         </div>
-      </div>
-
-      <dl class="shop-stats">
-        <div><dt>共有</dt><dd>${posts.length}<small>杯</small></dd></div>
-        <div><dt>お店</dt><dd>${shopNames.size}<small>店</small></dd></div>
-        <div><dt>最高</dt><dd>${posts.length ? Math.max(...posts.map((p) => p.score)) : '–'}<small>点</small></dd></div>
-      </dl>
-
-      <div class="follow-stats">
-        <a href="#/follows/${id}?type=following">フォロー中<strong>${followingCount}</strong></a>
-        <a href="#/follows/${id}?type=followers">フォロワー<strong>${followerCount}</strong></a>
       </div>
 
       ${isMe
         ? '<a class="btn btn-ghost btn-block" href="#/account">プロフィールを編集</a>'
         : `<div class="user-actions">
-             <button type="button" class="btn${isFollowing(id) ? ' btn-ghost' : ' btn-primary'}" id="follow-btn">
+             <button type="button" class="follow-btn${isFollowing(id) ? ' is-on' : ''}" id="follow-btn">
                ${isFollowing(id) ? 'フォロー中' : 'フォローする'}
              </button>
              <button type="button" class="bell-btn${isMuted(id) ? ' is-muted' : ''}" id="mute-btn"
@@ -3427,6 +3420,12 @@ async function renderUser({ id }) {
                ${bellIcon(isMuted(id))}
              </button>
            </div>`}
+
+      <dl class="shop-stats">
+        <div><dt>共有</dt><dd>${posts.length}<small>杯</small></dd></div>
+        <div><dt>お店</dt><dd>${shopNames.size}<small>店</small></dd></div>
+        <div><dt>最高</dt><dd>${posts.length ? Math.max(...posts.map((p) => p.score)) : '–'}<small>点</small></dd></div>
+      </dl>
 
       ${showZukan ? `
         <h2 class="section-title">図鑑</h2>

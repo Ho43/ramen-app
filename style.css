@@ -1659,9 +1659,9 @@ textarea { resize: vertical; }
 .bell-btn {
   display: grid;
   place-items: center;
-  width: 52px;
-  height: 52px;
-  margin: 4px 0 0;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
   border: 1.5px solid var(--line);
   border-radius: 50%;
   background: var(--surface);
@@ -1677,27 +1677,44 @@ textarea { resize: vertical; }
   display: flex;
   align-items: center;
   gap: 10px;
+  margin: 16px 0;
 }
 
-.user-actions .btn { flex: 1; }
+/* フォローボタン。全幅にはせず、内容に合わせた幅にとどめる */
+.follow-btn {
+  flex: 1;
+  max-width: 200px;
+  padding: 11px 0;
+  border: 1.5px solid var(--yolk);
+  border-radius: 999px;
+  background: var(--yolk);
+  color: #3A2405;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
 
-/* フォロー中／フォロワーの件数。押すと一覧へ */
+/* フォロー中は「解除できる」ことが分かるよう、枠だけの見た目にする */
+.follow-btn.is-on {
+  background: none;
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.follow-btn:active { transform: scale(0.97); }
+
+/* フォロー中／フォロワーの件数。背景は敷かず、文字だけで見せる */
 .follow-stats {
   display: flex;
-  gap: 10px;
-  margin: 14px 0;
+  gap: 16px;
+  margin-top: 8px;
 }
 
 .follow-stats a {
-  flex: 1;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px 0;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
+  align-items: baseline;
+  gap: 5px;
   color: var(--muted);
   font-size: 13px;
   text-decoration: none;
@@ -1706,8 +1723,10 @@ textarea { resize: vertical; }
 .follow-stats strong {
   color: var(--cream);
   font-family: var(--mincho);
-  font-size: 17px;
+  font-size: 16px;
 }
+
+.follow-stats a:active { opacity: 0.6; }
 
 /* フォロー中・フォロワーの一覧 */
 .follow-list {
