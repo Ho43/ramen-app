@@ -11,7 +11,7 @@
 // これによって、ログイン画面を開くたびに時間がかかるのを防ぐ。
 // =====================================================
 
-const CACHE_NAME = 'ramen-log-v37';
+const CACHE_NAME = 'ramen-log-v38';
 const FIREBASE_CACHE = 'ramen-log-firebase-v1';
 const APP_FILES = [
   './',
@@ -84,5 +84,60 @@ self.addEventListener('fetch', (event) => {
         return response;
       })
       .catch(() => caches.match(request, { ignoreSearch: true }))
+  );
+});
+
+// =====================================================
+// 通知（プッシュ通知）
+//
+// アプリを開いていないときに届く通知は、ここ（Service Worker）で受け取って
+// 画面に表示する。開いているときは cloud.js 側の watchForegroundMessages() が
+// 別に受け取るので、ここには来ない。
+//
+// classic worker（importなし）なので import ではなく importScripts を使う。
+// firebase-config.js の中身（住所のようなもので、隠す必要はない）をここでも
+// そのまま書いている。もしFirebaseプロジェクトの設定を変えたら、
+// firebase-config.js と両方直すこと。
+// =====================================================
+importScripts('https://www.gstatic.com/firebasejs/12.0.0/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/12.0.0/firebase-messaging-compat.js');
+
+firebase.initializeApp({
+  apiKey: "AIzaSyD3tP4D_EJlxvWVRD97aGHxbtM7TVZu7vg",
+  authDomain: "maze-log-6ac46.firebaseapp.com",
+  projectId: "maze-log-6ac46",
+  storageBucket: "maze-log-6ac46.firebasestorage.app",
+  messagingSenderId: "229867191911",
+  appId: "1:229867191911:web:3f8e03ce98533b2fb95ec2",
+});
+
+const messaging = firebase.messaging();
+
+messaging.onBackgroundMessage((payload) => {
+  const title = payload.notification?.title ?? 'ラーメン記録';
+  self.registration.showNotification(title, {
+    body: payload.notification?.body ?? '',
+    icon: './icons/icon-192.png',
+    badge: './icons/icon-192.png',
+    data: payload.data ?? {},
+  });
+});
+
+// 通知をタップしたら、アプリを開く（すでに開いていればそちらを前面に出す）
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification.data?.postId
+    ? `./#/post/${event.notification.data.postId}`
+    : './#/feed';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if ('focus' in client) {
+          client.navigate(url);
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(url);
+    })
   );
 });

@@ -40,6 +40,12 @@ import {
   where,
   getDocs,
 } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js';
+import {
+  getMessaging,
+  getToken,
+  onMessage,
+  isSupported as isMessagingSupported,
+} from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-messaging.js';
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
@@ -214,4 +220,43 @@ export async function getPostsTaggedWith(uid) {
   const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   posts.sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
   return posts;
+}
+
+/* ---------- 通知（プッシュ通知） ---------- */
+
+// この端末・このブラウザが通知に対応しているか。
+// 対応していない環境（iPhoneでホーム画面に追加していないSafariタブなど）では
+// 呼び出し側で通知の設定自体を隠す
+export async function notificationsSupported() {
+  try {
+    return await isMessagingSupported();
+  } catch {
+    return false;
+  }
+}
+
+// 通知を許可してもらい、この端末の宛先（トークン）を発行する。
+// vapidKey は Firebaseコンソールで発行した公開鍵、swRegistration は
+// すでに登録済みの Service Worker（sw.js）をそのまま渡す
+export async function enableNotifications(vapidKey, swRegistration) {
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') return null;
+  const messaging = getMessaging(app);
+  return getToken(messaging, { vapidKey, serviceWorkerRegistration: swRegistration });
+}
+
+// 発行した宛先を、自分のプロフィールに覚えておく（複数端末ぶん配列で持つ）
+export async function saveFcmToken(uid, token) {
+  await updateDoc(doc(db, 'users', uid), { fcmTokens: arrayUnion(token) });
+}
+
+export async function removeFcmToken(uid, token) {
+  await updateDoc(doc(db, 'users', uid), { fcmTokens: arrayRemove(token) });
+}
+
+// アプリを開いている間（フォアグラウンド）に届いた通知はOSが自動表示しないので、
+// 呼び出し側でトーストなど好きな見せ方をする
+export function watchForegroundMessages(callback) {
+  const messaging = getMessaging(app);
+  return onMessage(messaging, callback);
 }
