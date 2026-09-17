@@ -858,6 +858,20 @@ textarea { resize: vertical; }
 }
 
 /* ---------- お知らせの一覧 ---------- */
+/* お知らせ画面の上に出る、通知の有効化の呼びかけ */
+.news-notif {
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--yolk-dark);
+  border-radius: 10px;
+  background: rgba(242, 160, 7, 0.08);
+}
+
+.news-notif p {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
 .news-list {
   display: flex;
   flex-direction: column;

@@ -675,6 +675,24 @@ const NEARBY_DAILY_LIMIT = 3;
 // 「Cloud Messaging」タブ →「ウェブ構成」の「鍵ペアを生成」で発行される文字列。
 // まだ発行していない・貼り替えていない間は、通知を有効にするボタンを出さない
 const VAPID_KEY = 'BGvdofOsFN5YEP27w8EaxpPeaCVHn0o53B7DgqBNI_d-w3kw6_-VbQgZrRoJttBxSe-2anlWw8N8jU-V2nArgFU';
+const FCM_TOKEN_KEY = 'ramen-log:fcm-token';
+
+// この端末・この開き方で通知が使えそうかどうか
+async function notificationsAvailable() {
+  return VAPID_KEY !== '__VAPID_KEY__' && await cloud.notificationsSupported();
+}
+
+// 通知を許可してもらい、宛先を保存するところまで一気にやる。
+// 設定画面・お知らせ画面のどちらからも同じ処理を呼べるよう、ここに1つだけ置いている。
+// 戻り値: 'ok'（有効にできた） / 'denied'（許可されなかった） / エラーは投げる
+async function enableNotificationsNow() {
+  const reg = await navigator.serviceWorker.getRegistration();
+  const token = await cloud.enableNotifications(VAPID_KEY, reg);
+  if (!token) return 'denied';
+  await cloud.saveFcmToken(me.user.uid, token);
+  localStorage.setItem(FCM_TOKEN_KEY, token);
+  return 'ok';
+}
 // 点数を4段階に分ける
 function faceTier(score) {
   if (score >= GUILTY) return 3; // ギルティ
@@ -1233,8 +1251,19 @@ async function renderNews() {
   const read = await newsReadVersion();
   const unreadCount = await newsUnreadCount();
 
+  // 通知がまだ有効になっていない人にだけ、ここからも有効にできるようにする
+  const canOfferNotif = me.user
+    && await notificationsAvailable()
+    && !localStorage.getItem(FCM_TOKEN_KEY)
+    && Notification.permission !== 'denied';
+
   app.innerHTML = header('お知らせ', { back: '#/' }) + `
     <section class="news">
+      ${canOfferNotif ? `
+        <div class="news-notif">
+          <p>通知を有効にすると、身内の新しい共有やギルティ・コメントにすぐ気づけます。</p>
+          <button type="button" class="btn btn-primary btn-block" id="news-notif-enable">通知を有効にする</button>
+        </div>` : ''}
       <ul class="news-list">
         ${CHANGELOG.map((entry, i) => `
           <li class="news-item${i < unreadCount ? ' is-unread' : ''}">
@@ -1250,6 +1279,27 @@ async function renderNews() {
       </ul>
       <p class="hint">今お使いの版：${esc(APP_VERSION.replace('ramen-log-', ''))}</p>
     </section>`;
+
+  const notifBtn = $('#news-notif-enable');
+  if (notifBtn) {
+    notifBtn.onclick = async () => {
+      notifBtn.disabled = true;
+      try {
+        const result = await enableNotificationsNow();
+        if (result === 'denied') {
+          toast('許可されませんでした');
+          notifBtn.disabled = false;
+          return;
+        }
+        toast('通知を有効にしました');
+        notifBtn.closest('.news-notif')?.remove();
+      } catch (err) {
+        console.error(err);
+        toast('通知を設定できませんでした');
+        notifBtn.disabled = false;
+      }
+    };
+  }
 
   // 開いた時点で既読にする。表示そのものは今の未読のまま残して、
   // 何が新しかったのかをこの画面の中では見えるようにしておく
@@ -3633,6 +3683,16 @@ function downloadFile(file) {
    未読の数は、いちばん上の version を読んだかどうかで数えている。 */
 const CHANGELOG = [
   {
+    version: 'ramen-log-v39',
+    date: '2026-09-17',
+    title: '通知（プッシュ通知）',
+    items: [
+      '身内が新しく共有したとき、自分の投稿にギルティが付いたとき、コメントが付いたときに通知が届くようにした',
+      'どの通知を受け取るかは、設定画面から種類ごとにオン・オフできる',
+      'このお知らせの上にある「通知を有効にする」からも設定できる',
+    ],
+  },
+  {
     version: 'ramen-log-v36',
     date: '2026-09-16',
     title: 'お知らせと更新のお知らせ',
@@ -3711,7 +3771,7 @@ async function markNewsRead() {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v38';
+const APP_VERSION = 'ramen-log-v39';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -3847,10 +3907,9 @@ async function renderSettings() {
     const notifState = $('#notif-state');
     const notifEnable = $('#notif-enable');
     const notifToggles = $('#notif-toggles');
-    const TOKEN_KEY = 'ramen-log:fcm-token';
 
-    const supported = VAPID_KEY !== '__VAPID_KEY__' && await cloud.notificationsSupported();
-    const savedToken = localStorage.getItem(TOKEN_KEY);
+    const supported = await notificationsAvailable();
+    const savedToken = localStorage.getItem(FCM_TOKEN_KEY);
 
     if (!supported) {
       notifState.textContent = VAPID_KEY === '__VAPID_KEY__'
@@ -3869,15 +3928,12 @@ async function renderSettings() {
     notifEnable.onclick = async () => {
       notifEnable.disabled = true;
       try {
-        const reg = await navigator.serviceWorker.getRegistration();
-        const token = await cloud.enableNotifications(VAPID_KEY, reg);
-        if (!token) {
+        const result = await enableNotificationsNow();
+        if (result === 'denied') {
           notifState.textContent = '許可されませんでした';
           notifEnable.disabled = false;
           return;
         }
-        await cloud.saveFcmToken(me.user.uid, token);
-        localStorage.setItem(TOKEN_KEY, token);
         notifState.textContent = '有効です';
         notifEnable.hidden = true;
         notifToggles.hidden = false;
