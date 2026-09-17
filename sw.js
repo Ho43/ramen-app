@@ -11,7 +11,7 @@
 // これによって、ログイン画面を開くたびに時間がかかるのを防ぐ。
 // =====================================================
 
-const CACHE_NAME = 'ramen-log-v39';
+const CACHE_NAME = 'ramen-log-v40';
 const FIREBASE_CACHE = 'ramen-log-firebase-v1';
 const APP_FILES = [
   './',
@@ -90,9 +90,11 @@ self.addEventListener('fetch', (event) => {
 // =====================================================
 // 通知（プッシュ通知）
 //
-// アプリを開いていないときに届く通知は、ここ（Service Worker）で受け取って
-// 画面に表示する。開いているときは cloud.js 側の watchForegroundMessages() が
-// 別に受け取るので、ここには来ない。
+// 表示そのものは Firebase のSDKに任せている。
+// 送られてくるデータに notification（タイトルと本文）が入っていると、
+// SDKが自動で画面に出してくれるため、ここで自分でも showNotification() を
+// 呼んでしまうと、1件の通知が2つ表示されてしまう。
+// なので、ここでやるのは「タップされたときにどこを開くか」だけ。
 //
 // classic worker（importなし）なので import ではなく importScripts を使う。
 // firebase-config.js の中身（住所のようなもので、隠す必要はない）をここでも
@@ -111,24 +113,16 @@ firebase.initializeApp({
   appId: "1:229867191911:web:3f8e03ce98533b2fb95ec2",
 });
 
-const messaging = firebase.messaging();
-
-messaging.onBackgroundMessage((payload) => {
-  const title = payload.notification?.title ?? 'ラーメン記録';
-  self.registration.showNotification(title, {
-    body: payload.notification?.body ?? '',
-    icon: './icons/icon-192.png',
-    badge: './icons/icon-192.png',
-    data: payload.data ?? {},
-  });
-});
+// SDKに通知の受け取り口を用意させる。表示はSDKが自動で行うので、
+// ここでは onBackgroundMessage を使わない（使うと二重表示になる）
+firebase.messaging();
 
 // 通知をタップしたら、アプリを開く（すでに開いていればそちらを前面に出す）
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = event.notification.data?.postId
-    ? `./#/post/${event.notification.data.postId}`
-    : './#/feed';
+  const postId = event.notification.data?.postId
+    ?? event.notification.data?.FCM_MSG?.data?.postId;
+  const url = postId ? `./#/post/${postId}` : './#/feed';
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       for (const client of list) {
