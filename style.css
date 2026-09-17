@@ -1681,6 +1681,94 @@ textarea { resize: vertical; }
 
 .user-actions .btn { flex: 1; }
 
+/* フォロー中／フォロワーの件数。押すと一覧へ */
+.follow-stats {
+  display: flex;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.follow-stats a {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.follow-stats strong {
+  color: var(--cream);
+  font-family: var(--mincho);
+  font-size: 17px;
+}
+
+/* フォロー中・フォロワーの一覧 */
+.follow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.follow-list a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+}
+
+.follow-avatar {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--surface-2);
+}
+
+.follow-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.follow-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.follow-name {
+  font-family: var(--mincho);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.follow-bio {
+  overflow: hidden;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* ---------- みんなの記録：フォロー中／みんな の切り替え ---------- */
 .feed-tabs {
   display: flex;

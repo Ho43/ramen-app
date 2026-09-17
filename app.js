@@ -69,6 +69,7 @@ function parentOf(path) {
   if (path === '/') return null;                 // ホームではこれ以上戻らない
   if (path.startsWith('/post/')) return '#/feed';
   if (path.startsWith('/user/')) return '#/feed';
+  if (path.startsWith('/follows/')) return `#/user/${path.split('/')[2]}`;
   if (path.startsWith('/shop/')) return '#/zukan';
   if (path === '/nearby') return '#/zukan';
   if (path === '/account') return '#/settings';
@@ -2800,15 +2801,14 @@ async function renderFeed() {
 
   markFeedSeen(); // 開いた時点で既読にする
 
-  // 「フォロー中」「みんな」の切り替え。フォローしている人がいなければ、
-  // タブを出しても選びようがないので「みんな」だけにする
+  // 開くたびに「みんな」から始める（前に見ていたタブは引き継がない）
+  feedTab = 'all';
   const hasFollows = followUids().length > 0;
-  if (!hasFollows) feedTab = 'all';
 
   app.innerHTML = header('みんなの記録') + (hasFollows ? `
     <div class="feed-tabs" role="tablist">
-      <button type="button" class="feed-tab${feedTab === 'following' ? ' is-on' : ''}" data-feedtab="following" role="tab" aria-selected="${feedTab === 'following'}">フォロー中</button>
       <button type="button" class="feed-tab${feedTab === 'all' ? ' is-on' : ''}" data-feedtab="all" role="tab" aria-selected="${feedTab === 'all'}">みんな</button>
+      <button type="button" class="feed-tab${feedTab === 'following' ? ' is-on' : ''}" data-feedtab="following" role="tab" aria-selected="${feedTab === 'following'}">フォロー中</button>
     </div>` : '')
     + '<ul class="post-list" id="feed"><li class="empty">読み込んでいます…</li></ul>';
   const list = $('#feed');
@@ -3299,6 +3299,52 @@ function bellIcon(muted) {
 
 // ほかの人の図鑑やカレンダーは、その人が共有した記録から組み立てる。
 // 相手の端末の中身は見られないので、見えるのは共有されたものだけ。
+/* ===================== フォロー中・フォロワーの一覧 ===================== */
+
+async function renderFollows({ id, query }) {
+  if (!me.user) {
+    location.replace('#/feed');
+    return;
+  }
+
+  const type = query.get('type') === 'followers' ? 'followers' : 'following';
+  const title = type === 'followers' ? 'フォロワー' : 'フォロー中';
+  const backTo = { back: `#/user/${id}`, backLabel: 'プロフィール' };
+
+  app.innerHTML = header(title, backTo) + '<p class="empty">読み込んでいます…</p>';
+
+  let members = [];
+  let profile = null;
+  try {
+    [members, profile] = await Promise.all([cloud.getMembers(), cloud.getProfile(id)]);
+  } catch (err) {
+    console.error(err);
+    app.innerHTML = header(title, backTo) + `<p class="empty">${esc(shareErrorMessage(err))}</p>`;
+    return;
+  }
+
+  // 自分のフォローは、今この場で押した結果をすぐ反映したいので me.profile を優先する
+  const theirFollows = (id === me.user.uid ? me.profile?.follows : profile?.follows) ?? [];
+  const list = type === 'followers'
+    ? members.filter((m) => (m.follows ?? []).includes(id))
+    : members.filter((m) => theirFollows.includes(m.uid));
+
+  app.innerHTML = header(title, backTo) + (list.length ? `
+    <ul class="follow-list">
+      ${list.map((m) => `
+        <li>
+          <a href="#/user/${m.uid}">
+            <span class="follow-avatar"><img src="${avatarOf(m.avatar)}" alt=""></span>
+            <span class="follow-lines">
+              <span class="follow-name">${esc(m.nickname ?? '名無し')}</span>
+              ${(m.bio ?? '').trim() ? `<span class="follow-bio">${esc(m.bio.trim())}</span>` : ''}
+            </span>
+          </a>
+        </li>`).join('')}
+    </ul>`
+    : `<p class="empty">${type === 'followers' ? 'まだフォロワーはいません。' : 'まだ誰もフォローしていません。'}</p>`);
+}
+
 async function renderUser({ id }) {
   if (!me.user) {
     location.replace('#/feed');
@@ -3315,11 +3361,13 @@ async function renderUser({ id }) {
   let profile = null;
   let posts = [];
   let tagged = []; // この人が「一緒に食べた人」として出ている、他の人の記録
+  let members = []; // フォロー数・フォロワー数を数えるために全員分を読む
   try {
-    [profile, posts, tagged] = await Promise.all([
+    [profile, posts, tagged, members] = await Promise.all([
       cloud.getProfile(id),
       cloud.getPostsByUser(id),
       cloud.getPostsTaggedWith(id),
+      cloud.getMembers().catch(() => []), // 読めなくてもプロフィール自体は出す
     ]);
   } catch (err) {
     console.error(err);
@@ -3340,6 +3388,12 @@ async function renderUser({ id }) {
   const eligibleTier = badgeTierForCount(posts.length);
   const badgeTier = Math.min(profile?.badgeChoice ?? eligibleTier, eligibleTier);
 
+  // フォロー数・フォロワー数。自分のプロフィールを見ているときは、
+  // 今この場で押した結果をすぐ反映したいので me.profile の方を優先する
+  const theirFollows = (isMe ? me.profile?.follows : profile?.follows) ?? [];
+  const followingCount = theirFollows.length;
+  const followerCount = members.filter((m) => (m.follows ?? []).includes(id)).length;
+
   app.innerHTML = header(name, backTo) + `
     <section class="user">
       <div class="user-head">
@@ -3355,6 +3409,11 @@ async function renderUser({ id }) {
         <div><dt>お店</dt><dd>${shopNames.size}<small>店</small></dd></div>
         <div><dt>最高</dt><dd>${posts.length ? Math.max(...posts.map((p) => p.score)) : '–'}<small>点</small></dd></div>
       </dl>
+
+      <div class="follow-stats">
+        <a href="#/follows/${id}?type=following">フォロー中<strong>${followingCount}</strong></a>
+        <a href="#/follows/${id}?type=followers">フォロワー<strong>${followerCount}</strong></a>
+      </div>
 
       ${isMe
         ? '<a class="btn btn-ghost btn-block" href="#/account">プロフィールを編集</a>'
@@ -4373,6 +4432,7 @@ const routes = [
   { path: /^\/feed$/, view: renderFeed },
   { path: /^\/post\/([\w-]+)$/, view: renderPost },
   { path: /^\/user\/([\w@.-]+)$/, view: renderUser },
+  { path: /^\/follows\/([\w@.-]+)$/, view: renderFollows },
   { path: /^\/recommend$/, view: renderRecommend },
   { path: /^\/nearby$/, view: renderNearby },
   { path: /^\/news$/, view: renderNews },
