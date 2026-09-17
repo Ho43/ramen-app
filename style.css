@@ -1672,6 +1672,43 @@ textarea { resize: vertical; }
 .bell-btn.is-muted { color: var(--muted); }
 .bell-btn:active { transform: scale(0.94); }
 
+/* プロフィール画面：フォローボタンとベルを横に並べる */
+.user-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-actions .btn { flex: 1; }
+
+/* ---------- みんなの記録：フォロー中／みんな の切り替え ---------- */
+.feed-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.feed-tab {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.feed-tab.is-on {
+  background: var(--yolk);
+  color: #3A2405;
+}
+
 /* 左上から右下へ、オレンジから赤へ */
 .gauge-fill {
   height: 100%;

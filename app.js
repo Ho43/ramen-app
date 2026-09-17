@@ -347,6 +347,10 @@ function markFeedSeen() {
 const mutedUids = () => me.profile?.mutedUids ?? [];
 const isMuted = (uid) => mutedUids().includes(uid);
 
+// フォローしている相手（自分のプロフィールに覚えている）。「みんなの記録」の絞り込みに使う
+const followUids = () => me.profile?.follows ?? [];
+const isFollowing = (uid) => followUids().includes(uid);
+
 // 前回見てから増えた、他の人の共有の数を数える
 async function countUnread() {
   if (!me.user) return 0;
@@ -1595,9 +1599,9 @@ async function searchNearbyRamen(coords) {
 
 // 「済」の判子を押したときにギルチキが言う一言。毎回ランダムに選ぶ
 const KNOWN_STAMP_TALK = [
-  'ここはもう行ったことあるみたいだぜ。',
-  'なんだ？また行きてぇのか？',
-  '新しく開拓してみてもいいんじゃないか。',
+  'ギルチキ）ここはもう行ったことあるみたいだぜ。',
+  'ギルチキ）なんだ？また行きてぇのか？',
+  'ギルチキ）新しく開拓してみてもいいんじゃないか。',
 ];
 
 async function renderNearby() {
@@ -2502,6 +2506,8 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
 
 // 画面を離れるときに購読をやめるための置き場所
 let feedStop = null;
+// 「フォロー中」「みんな」のどちらを見ているか。画面を出入りしても覚えておく
+let feedTab = 'all';
 
 function stopFeed() {
   if (feedStop) {
@@ -2793,19 +2799,51 @@ async function renderFeed() {
   }
 
   markFeedSeen(); // 開いた時点で既読にする
-  app.innerHTML = header('みんなの記録') + '<ul class="post-list" id="feed"><li class="empty">読み込んでいます…</li></ul>';
+
+  // 「フォロー中」「みんな」の切り替え。フォローしている人がいなければ、
+  // タブを出しても選びようがないので「みんな」だけにする
+  const hasFollows = followUids().length > 0;
+  if (!hasFollows) feedTab = 'all';
+
+  app.innerHTML = header('みんなの記録') + (hasFollows ? `
+    <div class="feed-tabs" role="tablist">
+      <button type="button" class="feed-tab${feedTab === 'following' ? ' is-on' : ''}" data-feedtab="following" role="tab" aria-selected="${feedTab === 'following'}">フォロー中</button>
+      <button type="button" class="feed-tab${feedTab === 'all' ? ' is-on' : ''}" data-feedtab="all" role="tab" aria-selected="${feedTab === 'all'}">みんな</button>
+    </div>` : '')
+    + '<ul class="post-list" id="feed"><li class="empty">読み込んでいます…</li></ul>';
   const list = $('#feed');
 
   let latestPosts = [];
+  let allPosts = [];
+
+  function visiblePosts() {
+    if (feedTab !== 'following') return allPosts;
+    return allPosts.filter((p) => p.uid === me.user.uid || followUids().includes(p.uid));
+  }
 
   function drawFeed(posts) {
-    latestPosts = posts;
+    allPosts = posts;
+    latestPosts = visiblePosts();
     if (!document.body.contains(list)) return; // もう別の画面に移っている
-    list.innerHTML = posts.length
-      ? posts.map(postCard).join('')
-      : '<li class="empty">まだ誰も共有していません。記録の編集画面から共有できます。</li>';
+    list.innerHTML = latestPosts.length
+      ? latestPosts.map(postCard).join('')
+      : feedTab === 'following'
+        ? '<li class="empty">フォロー中の人の共有がまだありません。</li>'
+        : '<li class="empty">まだ誰も共有していません。記録の編集画面から共有できます。</li>';
     restorePop(list);
   }
+
+  $('.feed-tabs')?.addEventListener('click', (event) => {
+    const tabBtn = event.target.closest('[data-feedtab]');
+    if (!tabBtn || tabBtn.dataset.feedtab === feedTab) return;
+    feedTab = tabBtn.dataset.feedtab;
+    app.querySelectorAll('.feed-tab').forEach((b) => {
+      const on = b.dataset.feedtab === feedTab;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-selected', String(on));
+    });
+    drawFeed(allPosts);
+  });
 
   // 長押しで、誰が押したのかを見る
   setupLongPress(list, '[data-guilty]', (btn) => {
@@ -3320,11 +3358,16 @@ async function renderUser({ id }) {
 
       ${isMe
         ? '<a class="btn btn-ghost btn-block" href="#/account">プロフィールを編集</a>'
-        : `<button type="button" class="bell-btn${isMuted(id) ? ' is-muted' : ''}" id="mute-btn"
-             aria-pressed="${isMuted(id)}"
-             aria-label="${isMuted(id) ? 'この人のお知らせを受け取る' : 'この人のお知らせを切る'}">
-             ${bellIcon(isMuted(id))}
-           </button>`}
+        : `<div class="user-actions">
+             <button type="button" class="btn${isFollowing(id) ? ' btn-ghost' : ' btn-primary'}" id="follow-btn">
+               ${isFollowing(id) ? 'フォロー中' : 'フォローする'}
+             </button>
+             <button type="button" class="bell-btn${isMuted(id) ? ' is-muted' : ''}" id="mute-btn"
+               aria-pressed="${isMuted(id)}"
+               aria-label="${isMuted(id) ? 'この人のお知らせを受け取る' : 'この人のお知らせを切る'}">
+               ${bellIcon(isMuted(id))}
+             </button>
+           </div>`}
 
       ${showZukan ? `
         <h2 class="section-title">図鑑</h2>
@@ -3342,6 +3385,28 @@ async function renderUser({ id }) {
         <h2 class="section-title">一緒に食べた記録</h2>
         <ul class="post-list" id="user-tagged"></ul>` : ''}
     </section>`;
+
+  // フォローする・やめるを切り替える
+  const followBtn = $('#follow-btn');
+  if (followBtn) {
+    followBtn.onclick = async () => {
+      followBtn.disabled = true;
+      const next = isFollowing(id)
+        ? followUids().filter((u) => u !== id)
+        : [...followUids(), id];
+      try {
+        await cloud.saveProfile(me.user.uid, { follows: next });
+        me.profile = { ...me.profile, follows: next };
+        profileCache.set(me.user.uid, me.profile);
+        toast(next.includes(id) ? 'フォローしました' : 'フォローをやめました');
+        renderUser({ id });
+      } catch (err) {
+        console.error(err);
+        toast(shareErrorMessage(err));
+        followBtn.disabled = false;
+      }
+    };
+  }
 
   // この人のお知らせを受け取るかどうかを切り替える
   const muteBtn = $('#mute-btn');
