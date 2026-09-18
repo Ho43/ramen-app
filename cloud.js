@@ -35,7 +35,18 @@ function store() {
   if (!storePromise) {
     storePromise = (async () => {
       const [{ app }, f] = await Promise.all([core(), import(`${FB}firebase-firestore.js`)]);
-      return { db: f.getFirestore(app), f };
+      // 一度読んだものは端末の中に残しておき、次に開いたときは通信を待たずに出せるようにする。
+      // 使えない環境（プライベートモードなど）では、今まで通りその場限りの記憶で動く。
+      let db;
+      try {
+        db = f.initializeFirestore(app, {
+          localCache: f.persistentLocalCache({ tabManager: f.persistentMultipleTabManager() }),
+        });
+      } catch (err) {
+        console.warn('ローカルキャッシュを使えませんでした', err);
+        db = f.getFirestore(app);
+      }
+      return { db, f };
     })();
     storePromise.catch(() => { storePromise = null; });
   }
@@ -100,6 +111,27 @@ export async function signOutUser() {
   return a.signOut(auth);
 }
 
+// 投稿を新しい順に並べ直す。並べ替えまでFirestoreに任せると索引の作成が必要になるため、
+// 取ってきてからこちらで行う
+function toPosts(snap) {
+  const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  posts.sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
+  return posts;
+}
+
+// 端末に残っているぶんがあれば、通信を待たずに先に渡す（画面をすぐ出すため）。
+// 残っていない・使えないときは何もしないで、そのままサーバーからの返事を待つ。
+async function fromCache(f, ref, onCached, convert) {
+  if (!onCached) return;
+  try {
+    const snap = ref.type === 'document' ? await f.getDocFromCache(ref) : await f.getDocsFromCache(ref);
+    const value = convert(snap);
+    if (value != null) onCached(value);
+  } catch {
+    // キャッシュに無いだけなので、何もしない
+  }
+}
+
 /* ---------- プロフィール ---------- */
 
 export async function saveProfile(uid, profile) {
@@ -107,18 +139,24 @@ export async function saveProfile(uid, profile) {
   await f.setDoc(f.doc(db, 'users', uid), profile, { merge: true });
 }
 
-export async function getProfile(uid) {
+// onCached を渡すと、端末に残っているぶんを先に渡してから、最新を取りに行く
+export async function getProfile(uid, onCached) {
   const { db, f } = await store();
-  const snap = await f.getDoc(f.doc(db, 'users', uid));
+  const ref = f.doc(db, 'users', uid);
+  await fromCache(f, ref, onCached, (snap) => (snap.exists() ? snap.data() : null));
+  const snap = await f.getDoc(ref);
   return snap.exists() ? snap.data() : null;
 }
 
 // 身内のメンバー一覧。「一緒に食べた人」を選ぶときに使う。
 // users を読む許可はルール側ですでに身内全員に出ているので、
 // 追加のルールは要らない（allow read は1件取得と一覧取得の両方を含む）。
-export async function getMembers() {
+export async function getMembers(onCached) {
   const { db, f } = await store();
-  const snap = await f.getDocs(f.collection(db, 'users'));
+  const ref = f.collection(db, 'users');
+  const toMembers = (snap) => (snap.empty ? null : snap.docs.map((d) => ({ uid: d.id, ...d.data() })));
+  await fromCache(f, ref, onCached, toMembers);
+  const snap = await f.getDocs(ref);
   return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
 }
 
@@ -253,22 +291,20 @@ export async function getRecentPosts(max = 30) {
 
 // その人が共有した記録を集める。並べ替えは取ってきてからこちらで行う
 // （日付での並べ替えまでFirestoreに任せると、別途索引の作成が必要になるため）
-export async function getPostsByUser(uid) {
+export async function getPostsByUser(uid, onCached) {
   const { db, f } = await store();
-  const snap = await f.getDocs(f.query(f.collection(db, 'posts'), f.where('uid', '==', uid), f.limit(200)));
-  const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  posts.sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
-  return posts;
+  const q = f.query(f.collection(db, 'posts'), f.where('uid', '==', uid), f.limit(200));
+  await fromCache(f, q, onCached, (snap) => (snap.empty ? null : toPosts(snap)));
+  return toPosts(await f.getDocs(q));
 }
 
 // その人が「一緒に食べた人」として名前を出された記録。
 // 自分が共有したものではないので、getPostsByUser とは別に取る。
-export async function getPostsTaggedWith(uid) {
+export async function getPostsTaggedWith(uid, onCached) {
   const { db, f } = await store();
-  const snap = await f.getDocs(f.query(f.collection(db, 'posts'), f.where('withUids', 'array-contains', uid), f.limit(200)));
-  const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  posts.sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
-  return posts;
+  const q = f.query(f.collection(db, 'posts'), f.where('withUids', 'array-contains', uid), f.limit(200));
+  await fromCache(f, q, onCached, (snap) => (snap.empty ? null : toPosts(snap)));
+  return toPosts(await f.getDocs(q));
 }
 
 /* ---------- 通知（プッシュ通知） ---------- */
