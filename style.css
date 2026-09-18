@@ -3094,25 +3094,6 @@ body.gate-open { overflow: hidden; }
   color: var(--muted);
 }
 
-.about-rates {
-  margin: 12px 0 0;
-  padding: 0;
-  list-style: none;
-}
-.about-rates li {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--line);
-}
-.about-rate-stars { color: var(--yolk); min-width: 4em; }
-.about-rate-count { flex: 1; font-size: 14px; color: var(--muted); }
-.about-rate-pct {
-  font-family: var(--mincho);
-  font-size: 18px;
-  font-weight: 700;
-}
 .about-back { margin-top: 28px; }
 
 /* ===== 設定：カテゴリーごとのまとまり ===== */

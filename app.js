@@ -981,7 +981,7 @@ async function feedChiki() {
   return amount;
 }
 
-const GACHA_COST = 30;
+const GACHA_COST = 100;
 const RARITY_WEIGHT = { 1: 75, 2: 22, 3: 3 };
 
 // テストプレイ用の引き換えコード。1人1回だけ使える（chikiState.redeemedCodes に記録する）。
@@ -1240,7 +1240,7 @@ async function renderHome() {
     <section class="home">
       <div class="home-top">
         <div>
-          <h1 class="app-title">ラーメン記録</h1>
+          <h1 class="app-title">ま</h1>
           <p class="summary">
             ${records.length
               ? `今月 ${monthCount}杯　通算 ${records.length}杯　${shops.length}店`
@@ -1350,6 +1350,7 @@ async function renderNews() {
           <p>通知を有効にすると、身内の新しい共有やギルティ・コメントにすぐ気づけます。</p>
           <button type="button" class="btn btn-primary btn-block" id="news-notif-enable">通知を有効にする</button>
         </div>` : ''}
+      ${CHANGELOG.length ? '' : '<p class="empty">まだお知らせはありません。</p>'}
       <ul class="news-list">
         ${CHANGELOG.map((entry, i) => `
           <li class="news-item${i < unreadCount ? ' is-unread' : ''}">
@@ -1389,7 +1390,7 @@ async function renderNews() {
 
   // 開いた時点で既読にする。表示そのものは今の未読のまま残して、
   // 何が新しかったのかをこの画面の中では見えるようにしておく
-  if (read !== CHANGELOG[0]?.version) await markNewsRead();
+  if (CHANGELOG.length && read !== CHANGELOG[0]?.version) await markNewsRead();
 }
 
 /* ===================== おすすめの一杯 ===================== */
@@ -1635,11 +1636,10 @@ function showGachaResult({ costume, duplicate }) {
    設定を変えればここの表示も自動で合う。 */
 
 const ABOUT_CHIKI = {
-  intro: 'ラーメン記録の案内役。食べた一杯の点数を見て、いっしょに喜んだり、しょんぼりしたりする。',
+  intro: 'まぜそばの化身。人類の食事を見守っている。',
   profile: [
     ['名前', 'ギルチキ'],
-    ['見た目', '眼鏡をかけた鳥。灰色のところは髪の毛'],
-    ['好きなもの', 'ギルティなトッピング（チーズ・ニンニク・卵黄・マヨ）'],
+    ['好きなもの', 'まぜ'],
     ['口ぐせ', '「ギルティ！」'],
   ],
 };
@@ -1648,15 +1648,6 @@ async function renderAboutChiki() {
   const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   await loadChikiState();
   if (!alive()) return;
-
-  // レア度ごとの出やすさ（衣装1つずつの重みを合計して割合にする）
-  const total = COSTUMES.reduce((sum, c) => sum + RARITY_WEIGHT[c.rarity], 0);
-  const rates = [3, 2, 1].map((rarity) => {
-    const list = COSTUMES.filter((c) => c.rarity === rarity);
-    const weight = list.length * RARITY_WEIGHT[rarity];
-    const pct = total ? (weight / total) * 100 : 0;
-    return { rarity, count: list.length, pct: pct >= 10 ? pct.toFixed(0) : pct.toFixed(1) };
-  }).filter((r) => r.count);
 
   const feedMin = Math.min(...FEED_REWARDS.map((r) => r.amount));
   const feedMax = Math.max(...FEED_REWARDS.map((r) => r.amount));
@@ -1708,15 +1699,6 @@ async function renderAboutChiki() {
         </li>
       </ol>
 
-      <h2 class="section-title">衣装の出やすさ</h2>
-      <ul class="about-rates">
-        ${rates.map((r) => `
-          <li>
-            <span class="about-rate-stars">${rarityStars(r.rarity)}</span>
-            <span class="about-rate-count">${r.count}種類</span>
-            <span class="about-rate-pct">${r.pct}%</span>
-          </li>`).join('')}
-      </ul>
       <p class="hint">ポイントと衣装はこの端末の中にだけ保存される。機種変更やアプリの削除で消えるので注意。</p>
 
       <a class="btn btn-primary btn-block about-back" href="#/gacha">ガチャへ戻る</a>
@@ -4102,118 +4084,8 @@ function downloadFile(file) {
    新しい版を出すときは、この配列のいちばん上に1件足す。
    version は sw.js の CACHE_NAME と app.js の APP_VERSION に合わせる。
    未読の数は、いちばん上の version を読んだかどうかで数えている。 */
-const CHANGELOG = [
-  {
-    version: 'ramen-log-v44',
-    date: '2026-09-18',
-    title: 'アップデートは必ず手動で',
-    items: [
-      '新しい版が出ているときは、起動したときに更新の画面を出し、「アップデート」を押すまで中に入れないようにした',
-      '裏で勝手に新しくなることがなくなり、更新したかどうかがはっきり分かるようにした',
-      '「アップデート」を押したときに、ためてある古いファイルを消してから開き直すようにして、1回で確実に新しくなるようにした',
-      'みんなの記録から消えた投稿の「共有済み」の印が端末に残っていたとき、自動で外すようにした',
-    ],
-  },
-  {
-    version: 'ramen-log-v43',
-    date: '2026-09-18',
-    title: '戻るときに通ってきた順でたどれるように',
-    items: [
-      '左上の「戻る」とスワイプで、ひとつ前に見ていた画面へ戻るようにした（フォロー中から開いた相手のプロフィールで戻ると、みんなの記録に飛んでしまっていた）',
-      '「戻る」ボタンに、戻るさきの画面の名前を出すようにした',
-      'スワイプで戻るときに、端末のスワイプと重なって2画面ぶん戻ってしまうことがあったのを直した',
-    ],
-  },
-  {
-    version: 'ramen-log-v42',
-    date: '2026-09-18',
-    title: 'プロフィールの表示を速く',
-    items: [
-      'プロフィールを開いたとき、名前とアイコンを先に出して、図鑑やカレンダーはあとから埋めるようにした',
-      '一度見た内容は端末に残しておき、次に開いたときはすぐ出るようにした',
-      '自分の投稿の画面も同じように、先に出せるものから出すようにした',
-    ],
-  },
-  {
-    version: 'ramen-log-v41',
-    date: '2026-09-17',
-    title: 'フォロー通知・自分の投稿・設定の整理',
-    items: [
-      '誰かにフォローされたときにも通知が届くようにした（設定の「通知」からオン・オフできる）',
-      '自分が共有した記録をまとめて見られる「自分の投稿」を追加。プロフィールやアイコンのメニューから開ける',
-      'ガチャ画面に「ギルチキについて」を追加',
-      '設定画面を「アカウント」「通知」「データ」「アプリ」「その他」に分けて見やすくした',
-      'プロフィールの読み込み中に戻ると、あとからプロフィールが開いてしまい戻れなくなる不具合を直した',
-      'アプリの起動を速くした（前に読み込んだファイルをすぐ表示し、新しいファイルは裏で取り直す）',
-      'ログインや共有で使う部品を、必要になってから読み込むようにした',
-    ],
-  },
-  {
-    version: 'ramen-log-v39',
-    date: '2026-09-17',
-    title: '通知（プッシュ通知）',
-    items: [
-      '身内が新しく共有したとき、自分の投稿にギルティが付いたとき、コメントが付いたときに通知が届くようにした',
-      'どの通知を受け取るかは、設定画面から種類ごとにオン・オフできる',
-      'このお知らせの上にある「通知を有効にする」からも設定できる',
-    ],
-  },
-  {
-    version: 'ramen-log-v36',
-    date: '2026-09-16',
-    title: 'お知らせと更新のお知らせ',
-    items: [
-      'ホームの右上にお知らせを追加。更新内容をここで見られるようにした',
-      '新しい版があるとき、アプリを開いたときに知らせるようにした',
-      '「まだ行っていない近くの店」で、図鑑にあるお店に「済」の判子を付けるようにした',
-    ],
-  },
-  {
-    version: 'ramen-log-v33',
-    date: '2026-09-16',
-    title: 'まだ行っていない近くの店',
-    items: [
-      '図鑑から、現在地の近くのラーメン屋を探せるようにした',
-      '図鑑にあるお店は区別して表示。1日3回まで',
-    ],
-  },
-  {
-    version: 'ramen-log-v32',
-    date: '2026-09-16',
-    title: 'おすすめの一杯',
-    items: [
-      '最近よかった系統から、しばらく食べていない一杯をギルチキが薦めるようにした',
-      'セリフから「くわしく見る」で候補の一覧へ飛べる',
-    ],
-  },
-  {
-    version: 'ramen-log-v31',
-    date: '2026-09-16',
-    title: '投稿の編集と削除',
-    items: [
-      '自分の投稿の右上に「⋯」を追加。そこから編集と削除ができる',
-      '記録の編集画面から住所も直せるようにした',
-    ],
-  },
-  {
-    version: 'ramen-log-v30',
-    date: '2026-09-16',
-    title: '共有した記録の更新',
-    items: [
-      '共有済みの記録を編集すると、みんなの記録にも反映されるようにした',
-      '設定に「アプリの更新」を追加',
-    ],
-  },
-  {
-    version: 'ramen-log-v29',
-    date: '2026-09-16',
-    title: '一緒に食べた人',
-    items: [
-      '記録に「一緒に食べた人」を付けられるようにした',
-      'プロフィールに「一緒に食べた記録」が並ぶようにした',
-    ],
-  },
-];
+const CHANGELOG = [];
+
 
 async function newsReadVersion() {
   const rec = await db.get('chiki', 'newsRead');
@@ -4223,6 +4095,7 @@ async function newsReadVersion() {
 // 未読の件数。まだ一度も開いていないときは、古い記録を全部未読にしても
 // 驚かせるだけなので、いちばん新しい1件だけを未読として数える
 async function newsUnreadCount() {
+  if (!CHANGELOG.length) return 0; // お知らせが1件もないときは数えない
   const read = await newsReadVersion();
   if (!read) return 1;
   const index = CHANGELOG.findIndex((entry) => entry.version === read);
@@ -4237,7 +4110,7 @@ async function markNewsRead() {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v44';
+const APP_VERSION = 'ramen-log-v45';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
