@@ -27,6 +27,9 @@
 html {
   background: var(--bg);
   -webkit-text-size-adjust: 100%;
+  /* 横スワイプでブラウザ自身が前後のページへ動くのを止める
+     （アプリの「スワイプで戻る」と重なって2画面分戻ってしまうため） */
+  overscroll-behavior-x: none;
 }
 
 body {
@@ -87,7 +90,11 @@ a { color: var(--yolk); }
 
 .back {
   flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
   padding: 8px 10px 8px 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border: none;
   background: none;
   color: var(--yolk);
@@ -928,51 +935,92 @@ textarea { resize: vertical; }
 
 .news-points li { margin-bottom: 2px; }
 
-/* ---------- 起動時の更新のお知らせ ---------- */
-.update-bar {
+/* ---------- 起動時の更新（押して更新するまで中に入れない） ---------- */
+.update-gate {
   position: fixed;
-  left: 50%;
-  bottom: calc(24px + env(safe-area-inset-bottom));
-  z-index: 11;
+  inset: 0;
+  z-index: 100;
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: max-content;
-  max-width: calc(100vw - 32px);
-  padding: 10px 10px 10px 16px;
-  border: 1px solid var(--yolk-dark);
-  border-radius: 999px;
-  background: var(--surface);
-  transform: translateX(-50%);
+  justify-content: center;
+  padding: 24px calc(20px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left));
+  background: var(--bg);
+  overflow-y: auto;
 }
 
-.update-bar-text {
-  font-size: 13px;
+/* 後ろの画面を動かせないようにする */
+body.gate-open { overflow: hidden; }
+
+.update-gate-card {
+  width: 100%;
+  max-width: 340px;
+  padding: 28px 22px 24px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  text-align: center;
+}
+
+.update-gate-chiki {
+  width: 104px;
+  height: auto;
+  margin-bottom: 12px;
+}
+
+.update-gate-title {
+  margin: 0 0 8px;
+  font-family: var(--mincho);
+  font-size: 21px;
+  font-weight: 700;
   color: var(--cream);
 }
 
-.update-bar-go {
-  flex-shrink: 0;
-  padding: 6px 14px;
+.update-gate-ver {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.update-gate-ver span { margin: 0 4px; }
+.update-gate-ver b { color: var(--yolk); }
+
+.update-gate-lead {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--cream);
+}
+
+.update-gate-go {
+  width: 100%;
+  padding: 14px;
   border: none;
   border-radius: 999px;
   background: var(--yolk);
   color: #3A2405;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 700;
   cursor: pointer;
 }
 
-.update-bar-close {
-  flex-shrink: 0;
-  width: 26px;
-  height: 26px;
+.update-gate-go:disabled { opacity: 0.6; }
+
+.update-gate-help {
+  margin: 18px 0 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.update-gate-skip {
+  padding: 4px;
   border: none;
   background: none;
   color: var(--muted);
-  font-size: 18px;
-  line-height: 1;
+  font-family: inherit;
+  font-size: 13px;
+  text-decoration: underline;
   cursor: pointer;
 }
 
@@ -2892,3 +2940,292 @@ textarea { resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* 自分のプロフィール：「自分の投稿」と「プロフィールを編集」を横に並べる */
+.user-me-actions {
+  display: flex;
+  gap: 10px;
+  margin: 16px 0;
+}
+.user-me-actions .btn {
+  flex: 1;
+  justify-content: center;
+  padding-left: 8px;
+  padding-right: 8px;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+/* 自分の投稿：並び順の切り替え（みんなの記録のタブと同じ見た目） */
+.myposts-sort { margin-top: 16px; }
+
+/* ===== ギルチキについて ===== */
+.about-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--cream);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.about-link::before {
+  content: "?";
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--yolk);
+  color: var(--bg);
+  font-size: 12px;
+}
+.about-link:active { background: var(--surface-2); }
+
+.about-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 8px;
+  text-align: center;
+}
+.about-hero-img .chiki {
+  width: 120px;
+  height: 120px;
+}
+.about-intro {
+  margin: 0;
+  font-size: 15px;
+}
+
+.about-profile {
+  margin: 12px 0 0;
+}
+.about-profile > div {
+  display: grid;
+  grid-template-columns: 6.5em 1fr;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.about-profile dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+.about-profile dd {
+  margin: 0;
+  font-size: 15px;
+}
+
+.about-faces {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.about-faces li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: center;
+}
+.about-faces li.is-guilty { border-color: var(--shu); }
+.about-face .chiki {
+  width: 56px;
+  height: 56px;
+}
+.about-face-word {
+  margin-top: 4px;
+  font-family: var(--mincho);
+  font-size: 14px;
+  font-weight: 700;
+}
+.about-faces li.is-guilty .about-face-word { color: var(--yolk); }
+.about-face-range {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.about-steps {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.about-steps li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 0 10px 40px;
+  border-bottom: 1px solid var(--line);
+  counter-increment: step;
+}
+.about-steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 12px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--shu);
+  color: var(--cream);
+  font-family: var(--mincho);
+  font-weight: 700;
+}
+.about-steps span {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.about-rates {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.about-rates li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.about-rate-stars { color: var(--yolk); min-width: 4em; }
+.about-rate-count { flex: 1; font-size: 14px; color: var(--muted); }
+.about-rate-pct {
+  font-family: var(--mincho);
+  font-size: 18px;
+  font-weight: 700;
+}
+.about-back { margin-top: 28px; }
+
+/* ===== 設定：カテゴリーごとのまとまり ===== */
+.set-nav {
+  position: sticky;
+  top: 56px;             /* 画面上部のバーのすぐ下に貼りつく */
+  z-index: 4;
+  display: flex;
+  gap: 6px;
+  margin: 0 -16px;
+  padding: 6px 16px 10px;
+  overflow-x: auto;
+  background: var(--bg);
+  scrollbar-width: none;
+}
+.set-nav::-webkit-scrollbar { display: none; }
+.set-nav button {
+  flex: 1 0 auto;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--cream);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.set-nav button:active { background: var(--surface-2); }
+
+.set-group { margin-top: 24px; }
+.set-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-family: var(--mincho);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--cream);
+}
+/* 見出しの頭に朱の印をつけて、まとまりの切れ目をはっきりさせる */
+.set-group-title::before {
+  content: "";
+  width: 4px;
+  height: 1.1em;
+  border-radius: 2px;
+  background: var(--shu);
+}
+
+.set-card {
+  margin-bottom: 10px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.set-card > :first-child { margin-top: 0; }
+.set-card > :last-child { margin-bottom: 0; }
+.set-card .field { margin: 0; }
+.set-card .check-row {
+  margin: 8px 0 0;
+  background: var(--bg);
+}
+
+.set-sub {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--yolk);
+}
+#notif-toggles .set-sub { margin-top: 12px; }
+
+.set-lead {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  font-weight: 700;
+}
+.set-lead small {
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.set-stat { margin: 0; }
+.set-stat strong {
+  font-family: var(--mincho);
+  font-size: 20px;
+  color: var(--yolk);
+}
+
+.set-links {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.set-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--line);
+  color: var(--cream);
+  text-decoration: none;
+}
+.set-link:last-child { border-bottom: none; padding-bottom: 0; }
+.set-link::after {
+  content: "›";
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.set-card .form-error:empty { min-height: 0; margin: 0; }

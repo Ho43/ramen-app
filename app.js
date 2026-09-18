@@ -59,27 +59,95 @@ function toast(message) {
   toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
 }
 
+// ── 通ってきた道すじ ──────────────────────────────────────────
+// 「戻る」は、画面ごとに決めた「ひとつ上」ではなく、実際に通ってきた画面へ戻す。
+// 例：ホーム → 自分のプロフィール → フォロー中 → 相手のプロフィール と進んだら、
+// 戻るときも逆の順でたどりたい（前は「ひとつ上」の決め打ちだったので、
+// 相手のプロフィールからいきなり「みんなの記録」へ飛んでしまっていた）。
+// 履歴の項目ひとつひとつに通し番号を付けておき、その番号で道すじを覚えておく。
+const trail = [];         // trail[番号] = そのとき見ていた画面（#より後ろ）
+const trailTitle = [];    // その画面の見出し。次の画面の「戻る」の表記に使う
+let trailAt = -1;         // 今いる履歴の番号
+let replacingNow = false; // 今の画面を差し替えている最中かどうか
+
+// 今の画面を道すじに書き込む。戻る向きに動いたときだけ true を返す
+function trackVisit(route) {
+  const state = history.state ?? {};
+  const before = trailAt;
+  let at = typeof state.at === 'number' ? state.at : null;
+  if (at == null) {
+    // 番号が付いていない＝新しく進んできたところ
+    at = replacingNow ? Math.max(before, 0) : before + 1;
+    trail.length = at;      // 進む先にあった道すじは、もうたどれないので消す
+    trailTitle.length = at;
+    try {
+      history.replaceState({ ...state, at }, '');
+    } catch (err) {
+      console.warn('履歴に印を付けられませんでした', err);
+    }
+  }
+  replacingNow = false;
+  trail[at] = route;
+  trailAt = at;
+  return at < before;
+}
+
+// 実際に通ってきたひとつ前の画面（なければ null）
+function trailBack() {
+  return trailAt > 0 ? trail[trailAt - 1] ?? null : null;
+}
+
+// 戻るボタンに出す「ひとつ前の画面の名前」。戻れないときは null。
+// 決まった名前があればそれを、なければその画面の見出し（お店の名前など）を使う
+function backLabelOf() {
+  const route = trailBack();
+  if (!route) return null;
+  return screenName(route) ?? trailTitle[trailAt - 1] ?? '戻る';
+}
+
+// 画面の名前。見出しを覚えていないとき（ホームや、開き直した直後）に使う
+const SCREEN_NAMES = {
+  '/zukan': '図鑑',
+  '/calendar': 'カレンダー',
+  '/new': '記録する',
+  '/settings': '設定',
+  '/account': 'アカウント',
+  '/gacha': 'ガチャ',
+  '/badges': 'バッジ',
+  '/feed': 'みんなの記録',
+  '/recommend': 'おすすめ',
+  '/nearby': '近くの店',
+  '/news': 'お知らせ',
+  '/myposts': '自分の投稿',
+  '/about-chiki': 'ギルチキについて',
+};
+
+// お店の画面のように、見出しがそのつど変わる画面では undefined を返す（見出しをそのまま使う）
+function screenName(route) {
+  const [path, queryString = ''] = route.split('?');
+  if (path === '/') return 'ホーム';
+  if (path.startsWith('/follows/')) {
+    return new URLSearchParams(queryString).get('type') === 'followers' ? 'フォロワー' : 'フォロー中';
+  }
+  if (path.startsWith('/user/')) return 'プロフィール';
+  if (path.startsWith('/post/')) return '記録';
+  if (path.startsWith('/edit/')) return '記録';
+  return SCREEN_NAMES[path];
+}
+
+// 戻る。通ってきた画面があれば履歴をひとつ戻し、
+// なければ（通知から直接開いたときなど）画面ごとに決めた行き先へ。
 function goBack(fallback = '#/') {
-  if (history.length > 1) history.back();
+  if (trailBack() && history.length > 1) history.back();
   else location.hash = fallback;
 }
 
-// 画面ごとの「ひとつ上」。画面の深さを数えるときの目安に使う。
-// 実際にスワイプで戻る先は、左上のボタンと同じ backTarget を使う
-// （自分のプロフィールのように、同じURLでも行き先が変わる画面があるため）。
-function parentOf(path) {
-  if (path === '/') return null;                 // ホームではこれ以上戻らない
-  if (path.startsWith('/post/')) return '#/feed';
-  if (path.startsWith('/user/')) return '#/feed';
-  if (path.startsWith('/follows/')) return `#/user/${path.split('/')[2]}`;
-  if (path.startsWith('/shop/')) return '#/zukan';
-  if (path === '/nearby') return '#/zukan';
-  if (path === '/account') return '#/settings';
-  if (path === '/myposts') return me.user ? `#/user/${me.user.uid}` : '#/';
-  if (path === '/about-chiki') return '#/gacha';
-  if (path === '/gacha') return '#/';
-  if (path === '/badges') return '#/account';
-  return '#/';
+// 今の画面を別の画面に差し替える（履歴に積まない）。
+// 記録が見つからないときなど、その画面を道すじに残したくないときに使う。
+function goReplace(hash) {
+  if ((location.hash || '#/') === hash) return; // すでにその画面
+  replacingNow = true;
+  location.replace(hash);
 }
 
 // スワイプで戻れるか。戻れるなら行き先を返す
@@ -192,9 +260,13 @@ function enableSwipeBack(target) {
       const parent = swipeTarget();
       if (!parent) { place(0, true); return; }
       busy = true;
+      const from = location.hash; // 流している間の行き先の確認用
       place(S, true); // 指の動きの続きとして、画面の外まで流す
       setTimeout(() => {
         busy = false;
+        // ブラウザや端末自身の「スワイプで戻る」が先に動いていたら、
+        // ここで重ねて戻さない（2画面分戻ってしまうのを防ぐ）
+        if (location.hash !== from) { place(0, false); return; }
         swipedBack = true;  // 次の描画を「戻る向き」の動きにする
         if (parent === 'history') goBack();
         else location.hash = parent;
@@ -639,11 +711,15 @@ function cropImage(file) {
 let backTarget = null;
 
 function header(title, { back = '#/', backLabel = 'ホーム' } = {}) {
-  backTarget = back;
-  const backEl = back === 'history'
-    ? '<button type="button" class="back" data-action="back">‹ 戻る</button>'
-    : `<a class="back" href="${back}">‹ ${esc(backLabel)}</a>`;
-  return `<header class="bar">${backEl}<h1 class="bar-title">${esc(title)}</h1></header>`;
+  trailTitle[trailAt] = title; // 次の画面の「戻る」にこの名前が出る
+  const label = backLabelOf(); // 実際に通ってきたひとつ前の画面
+  if (label) {
+    backTarget = 'history';    // スワイプでも同じところへ戻す
+    return `<header class="bar"><button type="button" class="back" data-action="back">‹ ${esc(label)}</button><h1 class="bar-title">${esc(title)}</h1></header>`;
+  }
+  // 通知やブックマークからこの画面を直接開いたとき用の行き先
+  backTarget = back === 'history' ? '#/' : back;
+  return `<header class="bar"><a class="back" href="${backTarget}">‹ ${esc(backLabel)}</a><h1 class="bar-title">${esc(title)}</h1></header>`;
 }
 
 // 記録の1行（タップすると編集画面へ）
@@ -1386,7 +1462,7 @@ function costumeThumb(costume, { locked = false, equipped = false } = {}) {
 async function renderBadges() {
   const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   if (!me.user) {
-    location.replace('#/settings');
+    goReplace('#/settings');
     return;
   }
 
@@ -1869,7 +1945,7 @@ async function renderShop({ id }) {
   const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   const { records, shopMap } = await loadAll();
   const shop = shopMap.get(id);
-  if (!shop) { location.replace('#/zukan'); return; }
+  if (!shop) { goReplace('#/zukan'); return; }
 
   const recs = records.filter((r) => r.shopId === id).sort(byOldest);
   const scores = recs.map((r) => r.score);
@@ -1941,7 +2017,7 @@ async function renderShop({ id }) {
     await db.deleteShop(id, recs.map((r) => r.id), photoIds);
     photoIds.forEach(forgetPhotoUrl);
     toast('お店を削除しました');
-    location.replace('#/zukan');
+    goReplace('#/zukan');
   };
 }
 
@@ -2191,7 +2267,7 @@ async function renderNew({ query }) {
 
 async function renderEdit({ id }) {
   const record = await db.get('records', id);
-  if (!record) { location.replace('#/'); return; }
+  if (!record) { goReplace('#/'); return; }
   await renderForm({ record });
 }
 
@@ -2650,7 +2726,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
         goBack();
       } else {
         if (saved.score < GUILTY) toast(`${name}に記録しました（${nth}回目）`);
-        location.replace('#/');
+        goReplace('#/');
       }
     } catch (err) {
       console.error(err);
@@ -3224,7 +3300,7 @@ async function renderPost({ id, query }) {
   stopPost();
 
   if (!me.user) {
-    location.replace('#/feed');
+    goReplace('#/feed');
     return;
   }
 
@@ -3617,7 +3693,7 @@ async function renderFollows({ id, query }) {
     return; // ログインの確認が終わったら描き直される（フォローの通知から開いたときなど）
   }
   if (!me.user) {
-    location.replace('#/feed');
+    goReplace('#/feed');
     return;
   }
 
@@ -3668,7 +3744,7 @@ async function renderUser({ id }) {
     return; // ログインの確認が終わったら描き直される（フォローの通知から開いたときなど）
   }
   if (!me.user) {
-    location.replace('#/feed');
+    goReplace('#/feed');
     return;
   }
 
@@ -4018,6 +4094,26 @@ function downloadFile(file) {
    未読の数は、いちばん上の version を読んだかどうかで数えている。 */
 const CHANGELOG = [
   {
+    version: 'ramen-log-v44',
+    date: '2026-09-18',
+    title: 'アップデートは必ず手動で',
+    items: [
+      '新しい版が出ているときは、起動したときに更新の画面を出し、「アップデート」を押すまで中に入れないようにした',
+      '裏で勝手に新しくなることがなくなり、更新したかどうかがはっきり分かるようにした',
+      '「アップデート」を押したときに、ためてある古いファイルを消してから開き直すようにして、1回で確実に新しくなるようにした',
+    ],
+  },
+  {
+    version: 'ramen-log-v43',
+    date: '2026-09-18',
+    title: '戻るときに通ってきた順でたどれるように',
+    items: [
+      '左上の「戻る」とスワイプで、ひとつ前に見ていた画面へ戻るようにした（フォロー中から開いた相手のプロフィールで戻ると、みんなの記録に飛んでしまっていた）',
+      '「戻る」ボタンに、戻るさきの画面の名前を出すようにした',
+      'スワイプで戻るときに、端末のスワイプと重なって2画面ぶん戻ってしまうことがあったのを直した',
+    ],
+  },
+  {
     version: 'ramen-log-v42',
     date: '2026-09-18',
     title: 'プロフィールの表示を速く',
@@ -4130,7 +4226,7 @@ async function markNewsRead() {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v42';
+const APP_VERSION = 'ramen-log-v44';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -4145,6 +4241,19 @@ async function latestVersion() {
 // sw.js は install のときに skipWaiting() を呼ぶので、
 // 取ってこられさえすればそのまま新しいほうが使われる。
 async function applyUpdate() {
+  // 先に、ためてある古いファイルを消す。
+  // これをしないと Service Worker が「まずキャッシュを返す」ので、
+  // 開き直したあとも1回ぶん古いままになることがある（押したのに変わらない、の原因）。
+  // Firebaseの部品は中身が変わらないので残しておく（消すと次のログインで読み直しになる）
+  try {
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((key) => !key.includes('firebase')).map((key) => caches.delete(key)));
+    }
+  } catch (err) {
+    console.error(err);
+  }
+
   const reg = await navigator.serviceWorker?.getRegistration();
   if (reg) {
     try {
@@ -4168,36 +4277,102 @@ async function applyUpdate() {
   location.reload();
 }
 
-// アプリを開いたときに一度だけ、新しい版が出ていないか静かに調べて知らせる。
-// 同じ版について何度も出すとうるさいので、一度断られたら次の版まで黙る。
-async function noticeUpdateOnLaunch() {
+// ── 起動したときの版の確認 ──────────────────────────────
+// 古い版のままだと、どの機能がどこまで直っているのか分からなくなるので、
+// 更新があるときは画面をふさいで、押して更新してもらう（ソーシャルゲームと同じ考え方）。
+// 以前は消せるお知らせの帯を出すだけで、裏では勝手に新しくなっていたため、
+// 更新されたのかどうかが使っていて分からなかった。
+const UPDATE_TRY_KEY = 'ramen-log:update-try'; // 何回押しても変わらないときの逃げ道用
+let gateOpen = false;
+let lastVersionCheck = 0;
+let gateSkipUntil = 0;
+
+function shortVersion(version) {
+  return String(version).replace('ramen-log-', '');
+}
+
+// 同じ版に対して「アップデート」を押した回数
+function updateTries(version) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(UPDATE_TRY_KEY) ?? 'null');
+    return saved?.version === version ? (saved.count ?? 0) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function noteUpdateTry(version) {
+  try {
+    localStorage.setItem(UPDATE_TRY_KEY, JSON.stringify({ version, count: updateTries(version) + 1 }));
+  } catch { /* 使えなくても更新自体は進める */ }
+}
+
+function clearUpdateTries() {
+  try {
+    localStorage.removeItem(UPDATE_TRY_KEY);
+  } catch { /* 何もしない */ }
+}
+
+// 版を調べて、古ければ更新の画面でふさぐ。
+// オフラインなどで調べられないときはふさがない（そもそも更新できないため）。
+async function checkVersionGate({ force = false } = {}) {
+  if (gateOpen) return;
+  const now = Date.now();
+  if (!force && (now - lastVersionCheck < 5 * 60 * 1000 || now < gateSkipUntil)) return;
+  lastVersionCheck = now;
+
   let newest = null;
   try {
     newest = await latestVersion();
   } catch {
-    return; // オフラインなどで調べられなければ、何も出さない
+    return;
   }
-  if (!newest || newest === APP_VERSION) return;
+  if (!newest || newest === APP_VERSION) {
+    clearUpdateTries(); // 無事に新しくなったので、数えていた回数は消す
+    return;
+  }
+  if (!force && now < gateSkipUntil) return;
+  showUpdateGate(newest);
+}
 
-  const seen = await db.get('chiki', 'updateNoticeSeen');
-  if (seen?.version === newest) return;
-  await db.put('chiki', { id: 'updateNoticeSeen', version: newest });
+// 更新するまで中を触れないようにする画面
+function showUpdateGate(newest) {
+  if (gateOpen) return;
+  gateOpen = true;
+  const stuck = updateTries(newest) >= 2; // 2回押しても変わらなかったとき
 
-  const bar = document.createElement('div');
-  bar.className = 'update-bar';
-  bar.innerHTML = `
-    <span class="update-bar-text">アップデートがあります（${esc(newest.replace('ramen-log-', ''))}）</span>
-    <button type="button" class="update-bar-go" id="update-bar-go">更新する</button>
-    <button type="button" class="update-bar-close" id="update-bar-close" aria-label="閉じる">×</button>`;
-  document.body.appendChild(bar);
+  const gate = document.createElement('div');
+  gate.className = 'update-gate';
+  gate.innerHTML = `
+    <div class="update-gate-card">
+      <img class="update-gate-chiki" src="./giruchiki.png" alt="" draggable="false">
+      <h2 class="update-gate-title">アップデートがあります</h2>
+      <p class="update-gate-ver">${esc(shortVersion(APP_VERSION))} <span>→</span> <b>${esc(shortVersion(newest))}</b></p>
+      <p class="update-gate-lead">最新版に更新してからご利用ください。<br>記録や写真はそのまま残ります。</p>
+      <button type="button" class="update-gate-go" id="update-gate-go">アップデート</button>
+      ${stuck ? `
+        <p class="update-gate-help">何度か試しても変わらないときは、電波の良い場所でもう一度お試しください。
+        それでも変わらないときは、いったんこのまま使えます。</p>
+        <button type="button" class="update-gate-skip" id="update-gate-skip">今回はこのまま使う</button>` : ''}
+    </div>`;
+  document.body.appendChild(gate);
+  document.body.classList.add('gate-open'); // 後ろの画面を動かせなくする
 
-  bar.querySelector('#update-bar-close').onclick = () => bar.remove();
-  bar.querySelector('#update-bar-go').onclick = async () => {
-    const go = bar.querySelector('#update-bar-go');
+  gate.querySelector('#update-gate-go').onclick = async () => {
+    const go = gate.querySelector('#update-gate-go');
     go.disabled = true;
-    go.textContent = '更新中…';
+    go.textContent = '更新しています…';
+    noteUpdateTry(newest);
     await applyUpdate();
   };
+
+  gate.querySelector('#update-gate-skip')?.addEventListener('click', () => {
+    clearUpdateTries();
+    gate.remove();
+    document.body.classList.remove('gate-open');
+    gateOpen = false;
+    gateSkipUntil = Date.now() + 60 * 60 * 1000; // 1時間は出し直さない
+  });
 }
 
 async function renderSettings() {
@@ -4409,12 +4584,8 @@ async function renderSettings() {
     }
 
     updateState.textContent = `新しい版があります（${APP_VERSION} → ${newest}）`;
-    if (!confirm(`新しい版（${newest}）があります。更新して開き直しますか？\n記録はそのまま残ります。`)) {
-      updateBtn.disabled = false;
-      return;
-    }
-    updateState.textContent = '更新しています…';
-    await applyUpdate();
+    updateBtn.disabled = false;
+    showUpdateGate(newest); // 更新の画面を出す（そこから更新する）
   };
 
   // 開いたときに一度だけ静かに調べておく。
@@ -4571,7 +4742,7 @@ async function renderSettings() {
       [...photoUrls.keys()].forEach(forgetPhotoUrl);
       askPersist();
       toast('バックアップから復元しました');
-      location.replace('#/');
+      goReplace('#/');
     } catch (err) {
       console.error(err);
       alert('このファイルは読み込めませんでした。このアプリで作成したバックアップファイルを選んでください。');
@@ -4999,21 +5170,8 @@ const routes = [
   { path: /^\/about-chiki$/, view: renderAboutChiki },
 ];
 
-// 進んだのか戻ったのかを見分けるため、ホームからの遠さを数えておく
-let lastDepth = 0;
 let swipedBack = false; // 右スワイプで戻ってきたところかどうか
 let swipedUp = false; // ホームから上スワイプでみんなの記録に来たところかどうか
-
-function depthOf(path) {
-  let n = 0;
-  let p = path;
-  while (parentOf(p)) {
-    n += 1;
-    p = parentOf(p).slice(1);
-    if (n > 6) break;
-  }
-  return n;
-}
 
 // 画面を切り替えるときに軽く滑らせる
 function playPageIn(back) {
@@ -5053,8 +5211,10 @@ async function router() {
   stopPost();
   backTarget = null; // このあと header が呼ばれたときに入る（ホームでは呼ばれない）
 
-  const [path, queryString = ''] = (location.hash.slice(1) || '/').split('?');
+  const here = location.hash.slice(1) || '/';
+  const [path, queryString = ''] = here.split('?');
   const query = new URLSearchParams(queryString);
+  const movedBack = trackVisit(here); // 通ってきた道すじに書き込む
 
   for (const route of routes) {
     const match = path.match(route.path);
@@ -5069,13 +5229,11 @@ async function router() {
         <small>${esc(err.message)}</small></p>`;
     }
     if (seq !== navSeq) return; // 待っている間に別の画面へ移っていた
-    const depth = depthOf(path);
-    playPageIn(depth < lastDepth);
-    lastDepth = depth;
+    playPageIn(movedBack);
     window.scrollTo(0, 0);
     return;
   }
-  location.replace('#/');
+  goReplace('#/');
 }
 
 // 「戻る」ボタン（画面ごとに作り直されるので、親要素でまとめて受け取る）
@@ -5100,8 +5258,12 @@ loadChikiState().then(() => {
 window.addEventListener('hashchange', router);
 router();
 
-// 起動して少し落ち着いてから、新しい版が出ていないか調べる
-setTimeout(() => { noticeUpdateOnLaunch(); }, 1500);
+// 起動したらすぐ版を調べ、古ければ更新の画面でふさぐ。
+// スマホのアプリは閉じずに行き来することが多いので、戻ってきたときにも調べる
+checkVersionGate({ force: true });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') checkVersionGate();
+});
 
 // オフラインでも開けるようにする仕組み（Service Worker）を登録
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
