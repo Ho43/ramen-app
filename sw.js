@@ -11,7 +11,7 @@
 // これによって、ログイン画面を開くたびに時間がかかるのを防ぐ。
 // =====================================================
 
-const CACHE_NAME = 'ramen-log-v40';
+const CACHE_NAME = 'ramen-log-v41';
 const FIREBASE_CACHE = 'ramen-log-firebase-v1';
 const APP_FILES = [
   './',
@@ -71,19 +71,25 @@ self.addEventListener('fetch', (event) => {
   // 毎回ちがうURL（?t=…）で来るので、貯めても使い道がないため。
   if (new URL(request.url).pathname.endsWith('/sw.js')) return;
 
-  // よく変わるファイル（コードや見た目）だけ、ブラウザのキャッシュも無視して必ず取りに行く。
-  // 画像やアイコンはめったに変わらないので、今まで通りキャッシュに任せて速さを優先する
-  const path = new URL(request.url).pathname;
-  const alwaysFresh = /\.(html|js|css)$|\/$/.test(path);
-
+  // まずキャッシュにあるものを返して、すぐ画面を出す。
+  // 新しいファイルは裏で取り直してキャッシュを入れ替えるので、次に開いたときから新しくなる。
+  // （以前はコード・見た目を毎回ネットから取り直していたため、電波が弱いと
+  //   起動のたびにその待ち時間が発生していた。更新に気づく仕組みは、
+  //   起動時の帯と設定の「アプリの更新」が別に持っているので、これで困らない）
   event.respondWith(
-    fetch(request, alwaysFresh ? { cache: 'no-store' } : {})
-      .then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-        return response;
-      })
-      .catch(() => caches.match(request, { ignoreSearch: true }))
+    caches.match(request, { ignoreSearch: true }).then((cached) => {
+      const path = new URL(request.url).pathname;
+      const alwaysFresh = /\.(html|js|css)$|\/$/.test(path);
+      const fresh = fetch(request, alwaysFresh ? { cache: 'no-store' } : {})
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          return response;
+        })
+        .catch(() => cached);
+      // キャッシュがあればそれを返し、取り直しは裏で進める
+      return cached || fresh;
+    })
   );
 });
 
@@ -120,9 +126,13 @@ firebase.messaging();
 // 通知をタップしたら、アプリを開く（すでに開いていればそちらを前面に出す）
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const postId = event.notification.data?.postId
-    ?? event.notification.data?.FCM_MSG?.data?.postId;
-  const url = postId ? `./#/post/${postId}` : './#/feed';
+  const data = event.notification.data ?? {};
+  const payload = data.FCM_MSG?.data ?? data;
+  const postId = data.postId ?? payload.postId;
+  // フォローの通知はフォローしてくれた人のプロフィールへ
+  const url = payload.type === 'follow' && payload.uid
+    ? `./#/user/${payload.uid}`
+    : postId ? `./#/post/${postId}` : './#/feed';
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       for (const client of list) {
