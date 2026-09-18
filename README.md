@@ -179,6 +179,26 @@ python -m http.server 8000
 3. 変更したファイルを GitHub に上書きアップロード
 4. iPhone でアプリを開くと更新の画面が出るので、「アップデート」を押す。押すまで中には入れない。設定の「アプリの更新」から確認しても同じ画面が出る
 
+## みんなの記録をまとめて消したいとき（リリース前のリセットなど）
+
+Firestore のコレクションは `posts`（中に `comments`）・`users`・`_notifiedOnce`（通知の二重送り防止用）の3つ。
+消すときは `ramen-functions` フォルダで Firebase CLI を使う。`--recursive` を付けないと `comments` が残る。
+
+```
+firebase firestore:delete posts --recursive --project maze-log-6ac46
+firebase firestore:delete _notifiedOnce --recursive --project maze-log-6ac46
+```
+
+`users` を消すとニックネーム・アイコン・フォロー関係・通知の設定と通知トークンが消える（ログインアカウント自体は Authentication 側なので残る）。
+アカウントごと消すときは Firebase コンソールの Authentication から。
+
+端末側（IndexedDB）の記録は Firebase とは別の場所にあるので、消えない。
+自分の端末だけ空にするときは、ホーム画面のアイコンを削除してから入れ直す（先に設定の「バックアップを作成」で書き出しておくと戻せる）。
+
+`posts` を消すと、みんなの端末には「共有済み」の印（`records.postId`）だけが残る。
+これは `reconcileSharedLinks()`（自分の投稿の画面を開いたとき）と、記録を編集して保存したときの `not-found` の受け止めで自動的に外れるので、
+消す前に全員が v44 以降になっていれば手当ては要らない。
+
 ## データについての注意
 
 - 記録はiPhoneの中にだけ保存されます

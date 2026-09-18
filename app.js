@@ -2699,6 +2699,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
 
       // 共有済みの記録を編集したときは、みんなの記録の側も書き換える。
       // ここで失敗しても端末の記録はもう保存できているので、知らせるだけにする。
+      let sharedGone = false; // 共有先の投稿がもう無かったかどうか
       if (isEdit && saved.postId) {
         try {
           await cloud.updatePost(saved.postId, {
@@ -2713,7 +2714,14 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
           });
         } catch (err) {
           console.error(err);
-          toast('変更は保存しましたが、共有側に反映できませんでした');
+          if (isMissingPost(err)) {
+            // 共有先の投稿がもう無い。印だけ残っていても直しようがないので静かに外す
+            await db.put('records', { ...saved, postId: null });
+            saved.postId = null;
+            sharedGone = true;
+          } else {
+            toast('変更は保存しましたが、共有側に反映できませんでした');
+          }
         }
       }
 
@@ -2722,7 +2730,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       }
 
       if (isEdit) {
-        if (saved.score < GUILTY) toast('変更を保存しました');
+        if (saved.score < GUILTY) toast(sharedGone ? '変更を保存しました（共有は解除されました）' : '変更を保存しました');
         goBack();
       } else {
         if (saved.score < GUILTY) toast(`${name}に記録しました（${nth}回目）`);
@@ -3675,6 +3683,8 @@ async function renderMyPosts() {
     if (!alive()) return;
     posts = fresh;
     draw();
+    // サーバーの投稿と、端末の「共有済み」の印を突き合わせて直す
+    reconcileSharedLinks(fresh).catch((err) => console.error(err));
   } catch (err) {
     console.error(err);
     if (!alive() || posts) return; // すでにキャッシュぶんを出せていれば、そのままにする
@@ -4101,6 +4111,7 @@ const CHANGELOG = [
       '新しい版が出ているときは、起動したときに更新の画面を出し、「アップデート」を押すまで中に入れないようにした',
       '裏で勝手に新しくなることがなくなり、更新したかどうかがはっきり分かるようにした',
       '「アップデート」を押したときに、ためてある古いファイルを消してから開き直すようにして、1回で確実に新しくなるようにした',
+      'みんなの記録から消えた投稿の「共有済み」の印が端末に残っていたとき、自動で外すようにした',
     ],
   },
   {
@@ -4829,6 +4840,37 @@ function setupShare(record, shopNameText, shopAddressText) {
 
 // 投稿を消したとき、端末側に記録が残っていれば「共有中」の印を外す。
 // 記録がすでに無ければ（端末のデータが入れ替わっていた場合など）何もしない
+// 共有先の投稿がもう無いときのエラーかどうか。
+// みんなの記録をまとめて消したあと（リリース前のリセットなど）に起きる
+function isMissingPost(err) {
+  return String(err?.code ?? '').includes('not-found');
+}
+
+// サーバーから取ってきた自分の投稿と、端末側の「共有済み」の印を突き合わせて、
+// もう無いものは静かに外す。
+// 一覧に無いものは、別のアカウントで共有した記録の可能性もあるので、
+// 1件ずつ本当に無いかを確かめてから外す（無い投稿を読むだけなので軽い）
+async function reconcileSharedLinks(posts) {
+  if (!Array.isArray(posts)) return 0;
+  const live = new Set(posts.map((post) => post.id));
+  const records = await db.getAll('records');
+  const stale = records.filter((record) => record.postId && !live.has(record.postId));
+  let cleared = 0;
+  for (const record of stale) {
+    let post = null;
+    try {
+      post = await cloud.getPost(record.postId);
+    } catch (err) {
+      console.error(err);
+      continue; // 調べられなかったものは触らない
+    }
+    if (post) continue; // まだある（別のアカウントで共有したものなど）
+    await db.put('records', { ...record, postId: null });
+    cleared += 1;
+  }
+  return cleared;
+}
+
 async function clearLocalPostLink(postId) {
   const records = await db.getAll('records');
   const match = records.find((r) => r.postId === postId);
