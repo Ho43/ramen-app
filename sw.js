@@ -11,7 +11,7 @@
 // これによって、ログイン画面を開くたびに時間がかかるのを防ぐ。
 // =====================================================
 
-const CACHE_NAME = 'ramen-log-v41';
+const CACHE_NAME = 'ramen-log-v40';
 const FIREBASE_CACHE = 'ramen-log-firebase-v1';
 const APP_FILES = [
   './',
@@ -120,13 +120,9 @@ firebase.messaging();
 // 通知をタップしたら、アプリを開く（すでに開いていればそちらを前面に出す）
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const data = event.notification.data ?? {};
-  const payload = data.FCM_MSG?.data ?? data;
-  const postId = data.postId ?? payload.postId;
-  // フォローの通知はフォローしてくれた人のプロフィールへ
-  const url = payload.type === 'follow' && payload.uid
-    ? `./#/user/${payload.uid}`
-    : postId ? `./#/post/${postId}` : './#/feed';
+  const postId = event.notification.data?.postId
+    ?? event.notification.data?.FCM_MSG?.data?.postId;
+  const url = postId ? `./#/post/${postId}` : './#/feed';
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       for (const client of list) {

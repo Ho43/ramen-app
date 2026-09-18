@@ -8,9 +8,7 @@
 //   #/shop/ID     お店の詳細（図鑑から開く）
 //   #/new         記録する
 //   #/edit/ID     記録の編集・削除
-//   #/settings    設定（バックアップ・通知・アプリの更新など）
-//   #/myposts     自分が共有した記録の一覧
-//   #/about-chiki ギルチキについて（ガチャ画面から開く）
+//   #/settings    バックアップ・設定
 // =====================================================
 
 import * as db from './db.js';
@@ -75,8 +73,6 @@ function parentOf(path) {
   if (path.startsWith('/shop/')) return '#/zukan';
   if (path === '/nearby') return '#/zukan';
   if (path === '/account') return '#/settings';
-  if (path === '/myposts') return me.user ? `#/user/${me.user.uid}` : '#/';
-  if (path === '/about-chiki') return '#/gacha';
   if (path === '/gacha') return '#/';
   if (path === '/badges') return '#/account';
   return '#/';
@@ -330,8 +326,7 @@ cloud.watchAuth(async (user) => {
   if (user) profileCache.set(user.uid, me.profile);
   // ログイン状態で見た目が変わる画面だけ描き直す
   const path = (location.hash.slice(1) || '/').split('?')[0];
-  if (path === '/' || path === '/feed' || path === '/myposts'
-    || path.startsWith('/post/') || path.startsWith('/user/') || path.startsWith('/follows/')) router();
+  if (path === '/' || path === '/feed' || path.startsWith('/post/')) router();
 });
 
 const myName = () => me.profile?.nickname ?? me.user?.email?.split('@')[0] ?? '名無し';
@@ -400,8 +395,7 @@ function openAvatarMenu(anchor) {
       <span class="am-mail">${esc(me.user.email)}</span>
     </div>
     <a class="am-item" href="#/user/${me.user.uid}">プロフィール</a>
-    <a class="am-item" href="#/myposts">自分の投稿</a>
-    <a class="am-item" href="#/settings">設定</a>
+    <a class="am-item" href="#/settings">バックアップ・設定</a>
     <button type="button" class="am-item is-quiet" data-am="logout">ログアウト</button>`;
   document.body.appendChild(menu);
 
@@ -1139,7 +1133,6 @@ function guiltyFlash(message) {
 /* ===================== ホーム ===================== */
 
 async function renderHome() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   const { shops, records, shopMap } = await loadAll();
   const thisMonth = todayStr().slice(0, 7);
   const monthCount = records.filter((r) => r.date.startsWith(thisMonth)).length;
@@ -1159,7 +1152,6 @@ async function renderHome() {
     ? `${shopName(shopMap, subject.shopId)}・${subject.score}点`
     : '記録するボタンから始められる';
 
-  if (!alive()) return;
   app.innerHTML = `
     <section class="home">
       <div class="home-top">
@@ -1256,7 +1248,6 @@ async function renderHome() {
 /* ===================== お知らせ（更新内容） ===================== */
 
 async function renderNews() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   const read = await newsReadVersion();
   const unreadCount = await newsUnreadCount();
 
@@ -1266,7 +1257,6 @@ async function renderNews() {
     && !localStorage.getItem(FCM_TOKEN_KEY)
     && Notification.permission !== 'denied';
 
-  if (!alive()) return;
   app.innerHTML = header('お知らせ', { back: '#/' }) + `
     <section class="news">
       ${canOfferNotif ? `
@@ -1319,18 +1309,15 @@ async function renderNews() {
 /* ===================== おすすめの一杯 ===================== */
 
 async function renderRecommend() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   const { records, shopMap } = await loadAll();
   const rec = recommendOne(records, shopMap);
 
   if (!rec) {
-    if (!alive()) return;
     app.innerHTML = header('おすすめの一杯', { back: '#/' })
       + '<p class="empty">今はおすすめできる一杯がありません。記録が増えると出てきます。</p>';
     return;
   }
 
-  if (!alive()) return;
   app.innerHTML = header('おすすめの一杯', { back: '#/' }) + `
     <section class="reco">
       <p class="reco-tag">最近アツい系統：${esc(rec.tag)}<small>（直近30杯の平均 ${rec.avg.toFixed(0)}点・${rec.recentCount}杯）</small></p>
@@ -1384,7 +1371,6 @@ function costumeThumb(costume, { locked = false, equipped = false } = {}) {
 /* ===================== バッジ一覧 ===================== */
 
 async function renderBadges() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   if (!me.user) {
     location.replace('#/settings');
     return;
@@ -1398,7 +1384,6 @@ async function renderBadges() {
     count = (await cloud.getPostsByUser(me.user.uid)).length;
   } catch (err) {
     console.error(err);
-    if (!alive()) return;
     app.innerHTML = header('バッジ', { back: '#/account', backLabel: 'アカウント' })
       + `<p class="empty">${esc(shareErrorMessage(err))}</p>`;
     return;
@@ -1407,7 +1392,6 @@ async function renderBadges() {
   const eligibleTier = badgeTierForCount(count);
   let choice = Math.min(me.profile?.badgeChoice ?? eligibleTier, eligibleTier);
 
-  if (!alive()) return;
   app.innerHTML = header('バッジ', { back: '#/account', backLabel: 'アカウント' }) + `
     <section class="badges">
       <p class="hint">共有した記録が${BADGE_STEP}杯たまるごとに、次のバッジが手に入る。今は ${count}杯。</p>
@@ -1459,16 +1443,13 @@ async function renderBadges() {
 }
 
 async function renderGacha() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   await loadChikiState();
 
-  if (!alive()) return;
   app.innerHTML = header('ギルチキガチャ') + `
     <div class="gacha-head">
       <div class="gacha-mascot">${mascot(80)}</div>
       <p class="gacha-points">${chikiState.points}<small>pt</small></p>
       <p class="hint">餌をあげるとポイントがもらえる。ホームのギルチキをタップ。</p>
-      <a class="about-link" href="#/about-chiki">ギルチキについて</a>
     </div>
 
     <button type="button" class="btn btn-primary btn-block" id="gacha-draw" ${chikiState.points < GACHA_COST ? 'disabled' : ''}>
@@ -1552,103 +1533,7 @@ function showGachaResult({ costume, duplicate }) {
 
 /* ===================== 図鑑 ===================== */
 
-/* ===================== ギルチキについて（#/about-chiki） =====================
-   ガチャ画面の「ギルチキについて」から開く説明ページ。
-   文章を直したいときは ABOUT_CHIKI を書き換える。
-   ガチャの確率やポイントは、実際の設定（RARITY_WEIGHT など）から計算して出すので、
-   設定を変えればここの表示も自動で合う。 */
-
-const ABOUT_CHIKI = {
-  intro: 'ラーメン記録の案内役。食べた一杯の点数を見て、いっしょに喜んだり、しょんぼりしたりする。',
-  profile: [
-    ['名前', 'ギルチキ'],
-    ['見た目', '眼鏡をかけた鳥。灰色のところは髪の毛'],
-    ['好きなもの', 'ギルティなトッピング（チーズ・ニンニク・卵黄・マヨ）'],
-    ['口ぐせ', '「ギルティ！」'],
-  ],
-};
-
-async function renderAboutChiki() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
-  await loadChikiState();
-  if (!alive()) return;
-
-  // レア度ごとの出やすさ（衣装1つずつの重みを合計して割合にする）
-  const total = COSTUMES.reduce((sum, c) => sum + RARITY_WEIGHT[c.rarity], 0);
-  const rates = [3, 2, 1].map((rarity) => {
-    const list = COSTUMES.filter((c) => c.rarity === rarity);
-    const weight = list.length * RARITY_WEIGHT[rarity];
-    const pct = total ? (weight / total) * 100 : 0;
-    return { rarity, count: list.length, pct: pct >= 10 ? pct.toFixed(0) : pct.toFixed(1) };
-  }).filter((r) => r.count);
-
-  const feedMin = Math.min(...FEED_REWARDS.map((r) => r.amount));
-  const feedMax = Math.max(...FEED_REWARDS.map((r) => r.amount));
-
-  // 点数ごとの様子。代表の点数で描いて見せる
-  const faces = [
-    { score: 20, range: '0〜39点' },
-    { score: 55, range: '40〜69点' },
-    { score: 80, range: `70〜${GUILTY - 1}点` },
-    { score: GUILTY, range: `${GUILTY}点以上` },
-  ];
-
-  app.innerHTML = header('ギルチキについて', { back: '#/gacha', backLabel: 'ガチャ' }) + `
-    <section class="about-chiki">
-      <div class="about-hero">
-        <div class="about-hero-img">${mascot(100)}</div>
-        <p class="about-intro">${esc(ABOUT_CHIKI.intro)}</p>
-      </div>
-
-      <h2 class="section-title">プロフィール</h2>
-      <dl class="about-profile">
-        ${ABOUT_CHIKI.profile.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}
-      </dl>
-
-      <h2 class="section-title">点数で変わる様子</h2>
-      <p class="hint">記録した一杯の点数によって、ギルチキの様子が変わる。</p>
-      <ul class="about-faces">
-        ${faces.map((f) => `
-          <li class="${f.score >= GUILTY ? 'is-guilty' : ''}">
-            <span class="about-face">${mascot(f.score)}</span>
-            <span class="about-face-word">${esc(TIER_WORD[faceTier(f.score)])}</span>
-            <span class="about-face-range">${esc(f.range)}</span>
-          </li>`).join('')}
-      </ul>
-
-      <h2 class="section-title">遊び方</h2>
-      <ol class="about-steps">
-        <li>
-          <strong>餌をあげる</strong>
-          <span>ホームのギルチキをタップすると餌をあげられる。1日1回、${feedMin}〜${feedMax}ptのどれかがもらえる。</span>
-        </li>
-        <li>
-          <strong>ガチャを引く</strong>
-          <span>1回${GACHA_COST}pt。持っている衣装が出たときは、5ptが戻ってくる。</span>
-        </li>
-        <li>
-          <strong>着せ替える</strong>
-          <span>ガチャ画面の「持っている衣装」を押すと、ギルチキがその衣装に着替える。</span>
-        </li>
-      </ol>
-
-      <h2 class="section-title">衣装の出やすさ</h2>
-      <ul class="about-rates">
-        ${rates.map((r) => `
-          <li>
-            <span class="about-rate-stars">${rarityStars(r.rarity)}</span>
-            <span class="about-rate-count">${r.count}種類</span>
-            <span class="about-rate-pct">${r.pct}%</span>
-          </li>`).join('')}
-      </ul>
-      <p class="hint">ポイントと衣装はこの端末の中にだけ保存される。機種変更やアプリの削除で消えるので注意。</p>
-
-      <a class="btn btn-primary btn-block about-back" href="#/gacha">ガチャへ戻る</a>
-    </section>`;
-}
-
 async function renderZukan() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   const { shops, records } = await loadAll();
   // 登録した順に No.001, No.002 … と番号を振る
   const ordered = [...shops].sort((a, b) => a.createdAt - b.createdAt);
@@ -1665,7 +1550,6 @@ async function renderZukan() {
     };
   }));
 
-  if (!alive()) return;
   app.innerHTML = header('図鑑') + `
     <a class="btn btn-ghost btn-block" href="#/nearby">まだ行っていない近くの店を探す</a>
   ` + (items.length
@@ -1777,13 +1661,11 @@ const KNOWN_STAMP_TALK = [
 ];
 
 async function renderNearby() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   const { shops } = await loadAll();
   const shopNames = shops.map((s) => s.name);
   const used = await nearbyUsageToday();
   const remaining = NEARBY_DAILY_LIMIT - used;
 
-  if (!alive()) return;
   app.innerHTML = header('まだ行っていない近くの店') + `
     <section class="nearby">
       <p class="hint">現在地の近くから、ラーメン屋を探します。図鑑にあるお店は目印を付けて区別します。</p>
@@ -1866,7 +1748,6 @@ function mapUrl(name, address) {
 }
 
 async function renderShop({ id }) {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   const { records, shopMap } = await loadAll();
   const shop = shopMap.get(id);
   if (!shop) { location.replace('#/zukan'); return; }
@@ -1885,7 +1766,6 @@ async function renderShop({ id }) {
     .reverse()
     .join('');
 
-  if (!alive()) return;
   app.innerHTML = header(shop.name, { back: '#/zukan', backLabel: '図鑑' }) + `
     <section class="shop">
       <div class="shop-photo">${url ? `<img src="${url}" alt="">` : noImage}</div>
@@ -2088,7 +1968,6 @@ function monthCells(y, m, byDate, labelOf, today, selected) {
 }
 
 async function renderCalendar() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   const today = todayStr();
   if (!cal) {
     const t = new Date();
@@ -2114,7 +1993,6 @@ async function renderCalendar() {
     return `<div class="cal-pane">${monthCells(d.getFullYear(), d.getMonth(), byDate, (r) => shopName(shopMap, r.shopId), today, cal.selected)}</div>`;
   }).join('');
 
-  if (!alive()) return;
   app.innerHTML = header('カレンダー') + `
     <div class="cal-nav">
       <button type="button" class="cal-arrow" data-move="-1" aria-label="前の月">‹</button>
@@ -2206,7 +2084,6 @@ function clearDraft() {
 }
 
 async function renderForm({ record = null, presetShopId = null, presetDate = null }) {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   const isEdit = Boolean(record);
   const { shops, records } = await loadAll();
   // 書きかけがあれば、そこから復元する（新規記録のときだけ）
@@ -2242,7 +2119,6 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
     (record?.withUids ?? saved0?.withUids ?? []).filter((uid) => members.some((m) => m.uid === uid)),
   );
 
-  if (!alive()) return;
   app.innerHTML = header(isEdit ? '記録を編集' : '記録する', { back: 'history' }) + `
     <form class="form" id="rec-form" novalidate>
       <div class="field">
@@ -2892,8 +2768,6 @@ async function deleteSharedPost(postId) {
     toast('投稿を削除しました');
     const path = (location.hash.slice(1) || '/').split('?')[0];
     if (path.startsWith('/post/')) location.hash = '#/feed';
-    // 自動では更新されない一覧（自分の投稿・プロフィール）は描き直して消えたことを見せる
-    else if (path === '/myposts' || path.startsWith('/user/')) router();
   } catch (err) {
     console.error(err);
     toast(shareErrorMessage(err));
@@ -3482,134 +3356,7 @@ function bellIcon(muted) {
 // 相手の端末の中身は見られないので、見えるのは共有されたものだけ。
 /* ===================== フォロー中・フォロワーの一覧 ===================== */
 
-// 投稿カードの一覧に、写真の拡大・ギルティ・長押しでの一覧表示を付ける。
-// 「みんなの記録」と同じ動きを、他の画面の一覧でも使えるようにまとめたもの。
-// getPosts には、今その一覧に並んでいる投稿の配列を返す関数を渡す。
-function wirePostList(list, getPosts) {
-  setupLongPress(list, '[data-guilty]', (btn) => {
-    const post = getPosts().find((p) => p.id === btn.dataset.guilty);
-    showGuiltyList(post?.guiltyUids ?? []);
-  });
-
-  list.addEventListener('click', async (event) => {
-    const zoomBtn = event.target.closest('[data-zoom]');
-    if (zoomBtn) {
-      event.preventDefault();
-      const post = getPosts().find((p) => p.id === zoomBtn.closest('.post')?.dataset.postId);
-      if (post?.photo) openPhoto(post.photo);
-      return;
-    }
-
-    const btn = event.target.closest('[data-guilty]');
-    if (!btn || !me.user) return;
-    event.preventDefault();
-    const on = !btn.classList.contains('is-on');
-    btn.classList.toggle('is-on', on); // 通信を待たずに見た目を変える
-    tap(btn, btn.dataset.guilty, on);
-    const post = getPosts().find((p) => p.id === btn.dataset.guilty);
-    try {
-      await cloud.toggleGuilty(btn.dataset.guilty, me.user.uid, on);
-      if (post) {
-        const set = new Set(post.guiltyUids ?? []);
-        if (on) set.add(me.user.uid); else set.delete(me.user.uid);
-        post.guiltyUids = [...set]; // 長押しの一覧や描き直しでずれないように
-      }
-    } catch (err) {
-      console.error(err);
-      btn.classList.toggle('is-on', !on); // 失敗したら戻す
-      toast('うまくいきませんでした');
-    }
-  });
-}
-
-// 自分が共有した記録の一覧（#/myposts）
-const MYPOSTS_SORTS = {
-  new: { label: '新しい順', fn: (a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0) },
-  score: { label: '点数順', fn: (a, b) => b.score - a.score || (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0) },
-  guilty: { label: 'ギルティ順', fn: (a, b) => (b.guiltyUids?.length ?? 0) - (a.guiltyUids?.length ?? 0) || (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0) },
-};
-let myPostsSort = 'new'; // 並び順は、アプリを開いている間だけ覚えておく
-
-async function renderMyPosts() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
-  const title = '自分の投稿';
-  if (!me.ready) {
-    app.innerHTML = header(title) + '<p class="empty">確認しています…</p>';
-    return; // ログインの確認が終わったら描き直される
-  }
-  if (!me.user) {
-    app.innerHTML = header(title) + `
-      <p class="empty">ログインすると、自分が共有した記録をまとめて見られます。</p>
-      <a class="btn btn-primary btn-block" href="#/account">ログイン</a>`;
-    return;
-  }
-
-  const backTo = { back: `#/user/${me.user.uid}`, backLabel: 'プロフィール' };
-  app.innerHTML = header(title, backTo) + '<p class="empty">読み込んでいます…</p>';
-
-  let posts = [];
-  try {
-    posts = await cloud.getPostsByUser(me.user.uid);
-  } catch (err) {
-    console.error(err);
-    if (!alive()) return;
-    app.innerHTML = header(title, backTo) + `<p class="empty">${esc(shareErrorMessage(err))}</p>`;
-    return;
-  }
-  if (!alive()) return;
-
-  const guiltyTotal = posts.reduce((sum, p) => sum + (p.guiltyUids?.length ?? 0), 0);
-  const commentTotal = posts.reduce((sum, p) => sum + (p.commentCount ?? 0), 0);
-
-  app.innerHTML = header(title, backTo) + `
-    <section class="myposts">
-      <dl class="shop-stats">
-        <div><dt>共有</dt><dd>${posts.length}<small>杯</small></dd></div>
-        <div><dt>ギルティ</dt><dd>${guiltyTotal}<small>回</small></dd></div>
-        <div><dt>コメント</dt><dd>${commentTotal}<small>件</small></dd></div>
-      </dl>
-      ${posts.length > 1 ? `
-        <div class="feed-tabs myposts-sort" role="tablist">
-          ${Object.entries(MYPOSTS_SORTS).map(([key, { label }]) => `
-            <button type="button" class="feed-tab${key === myPostsSort ? ' is-on' : ''}" data-sort="${key}" role="tab" aria-selected="${key === myPostsSort}">${label}</button>`).join('')}
-        </div>` : ''}
-      <ul class="post-list" id="myposts-list"></ul>
-    </section>`;
-
-  const list = $('#myposts-list');
-  let shown = [];
-  const draw = () => {
-    if (!document.body.contains(list)) return;
-    shown = [...posts].sort(MYPOSTS_SORTS[myPostsSort].fn);
-    list.innerHTML = shown.length
-      ? shown.map((p) => postCard(p)).join('')
-      : '<li class="empty">まだ共有した記録がありません。記録の画面で「みんなに共有」を選ぶと、ここに並びます。</li>';
-    restorePop(list);
-  };
-  draw();
-  wirePostList(list, () => shown);
-
-  $('.myposts-sort')?.addEventListener('click', (event) => {
-    const btn = event.target.closest('[data-sort]');
-    if (!btn || btn.dataset.sort === myPostsSort) return;
-    myPostsSort = btn.dataset.sort;
-    app.querySelectorAll('.myposts-sort .feed-tab').forEach((b) => {
-      const on = b.dataset.sort === myPostsSort;
-      b.classList.toggle('is-on', on);
-      b.setAttribute('aria-selected', String(on));
-    });
-    draw();
-  });
-
-  if (await ensureProfiles(posts.flatMap((p) => [p.uid, p.lastComment?.uid, ...(p.withUids ?? [])]))) draw();
-}
-
 async function renderFollows({ id, query }) {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
-  if (!me.ready) {
-    app.innerHTML = header('プロフィール', { back: '#/feed', backLabel: 'みんなの記録' }) + '<p class="empty">確認しています…</p>';
-    return; // ログインの確認が終わったら描き直される（フォローの通知から開いたときなど）
-  }
   if (!me.user) {
     location.replace('#/feed');
     return;
@@ -3627,7 +3374,6 @@ async function renderFollows({ id, query }) {
     [members, profile] = await Promise.all([cloud.getMembers(), cloud.getProfile(id)]);
   } catch (err) {
     console.error(err);
-    if (!alive()) return;
     app.innerHTML = header(title, backTo) + `<p class="empty">${esc(shareErrorMessage(err))}</p>`;
     return;
   }
@@ -3638,7 +3384,6 @@ async function renderFollows({ id, query }) {
     ? members.filter((m) => (m.follows ?? []).includes(id))
     : members.filter((m) => theirFollows.includes(m.uid));
 
-  if (!alive()) return;
   app.innerHTML = header(title, backTo) + (list.length ? `
     <ul class="follow-list">
       ${list.map((m) => `
@@ -3656,11 +3401,6 @@ async function renderFollows({ id, query }) {
 }
 
 async function renderUser({ id }) {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
-  if (!me.ready) {
-    app.innerHTML = header('プロフィール', { back: '#/feed', backLabel: 'みんなの記録' }) + '<p class="empty">確認しています…</p>';
-    return; // ログインの確認が終わったら描き直される（フォローの通知から開いたときなど）
-  }
   if (!me.user) {
     location.replace('#/feed');
     return;
@@ -3686,7 +3426,6 @@ async function renderUser({ id }) {
     ]);
   } catch (err) {
     console.error(err);
-    if (!alive()) return;
     app.innerHTML = header('プロフィール', backTo)
       + `<p class="empty">${esc(shareErrorMessage(err))}</p>`;
     return;
@@ -3710,7 +3449,6 @@ async function renderUser({ id }) {
   const followingCount = theirFollows.length;
   const followerCount = members.filter((m) => (m.follows ?? []).includes(id)).length;
 
-  if (!alive()) return;
   app.innerHTML = header('プロフィール', backTo) + `
     <section class="user">
       <div class="user-head">
@@ -3726,10 +3464,7 @@ async function renderUser({ id }) {
       </div>
 
       ${isMe
-        ? `<div class="user-me-actions">
-             <a class="btn btn-ghost" href="#/myposts">自分の投稿</a>
-             <a class="btn btn-ghost" href="#/account">プロフィールを編集</a>
-           </div>`
+        ? '<a class="btn btn-ghost btn-block" href="#/account">プロフィールを編集</a>'
         : `<div class="user-actions">
              <button type="button" class="follow-btn${isFollowing(id) ? ' is-on' : ''}" id="follow-btn">
                ${isFollowing(id) ? 'フォロー中' : 'フォローする'}
@@ -3819,7 +3554,6 @@ async function renderUser({ id }) {
       taggedSlot.innerHTML = tagged.map((p) => postCard(p, { withLastComment: false })).join('');
     };
     draw();
-    wirePostList(taggedSlot, () => tagged);
     if (await ensureProfiles(tagged.flatMap((p) => [p.uid, ...(p.withUids ?? [])]))) draw();
   }
 }
@@ -3900,7 +3634,7 @@ function renderUserCalendar(slot, posts) {
   draw();
 }
 
-/* ===================== 設定（バックアップ・通知・アプリの更新など） ===================== */
+/* ===================== バックアップ・設定 ===================== */
 
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -3948,18 +3682,6 @@ function downloadFile(file) {
    version は sw.js の CACHE_NAME と app.js の APP_VERSION に合わせる。
    未読の数は、いちばん上の version を読んだかどうかで数えている。 */
 const CHANGELOG = [
-  {
-    version: 'ramen-log-v41',
-    date: '2026-09-17',
-    title: 'フォロー通知・自分の投稿・設定の整理',
-    items: [
-      '誰かにフォローされたときにも通知が届くようにした（設定の「通知」からオン・オフできる）',
-      '自分が共有した記録をまとめて見られる「自分の投稿」を追加。プロフィールやアイコンのメニューから開ける',
-      'ガチャ画面に「ギルチキについて」を追加',
-      '設定画面を「アカウント」「通知」「データ」「アプリ」「その他」に分けて見やすくした',
-      'プロフィールの読み込み中に戻ると、あとからプロフィールが開いてしまい戻れなくなる不具合を直した',
-    ],
-  },
   {
     version: 'ramen-log-v39',
     date: '2026-09-17',
@@ -4049,7 +3771,7 @@ async function markNewsRead() {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v41';
+const APP_VERSION = 'ramen-log-v40';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -4120,114 +3842,59 @@ async function noticeUpdateOnLaunch() {
 }
 
 async function renderSettings() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   const { shops, records } = await loadAll();
 
-  if (!alive()) return;
-  app.innerHTML = header('設定') + `
+  app.innerHTML = header('バックアップ・設定') + `
     <section class="settings">
-      <nav class="set-nav" aria-label="設定の項目">
-        <button type="button" data-jump="set-account">アカウント</button>
-        ${me.user ? '<button type="button" data-jump="set-notif">通知</button>' : ''}
-        <button type="button" data-jump="set-data">データ</button>
-        <button type="button" data-jump="set-app">アプリ</button>
-        <button type="button" data-jump="set-other">その他</button>
-      </nav>
-
-      <div class="set-group" id="set-account">
-        <h2 class="set-group-title">アカウント・共有</h2>
-        <div class="set-card">
-          ${me.user ? `
-            <p class="set-lead">${esc(myName())}<small>${esc(me.user.email ?? '')}</small></p>
-            <div class="set-links">
-              <a class="set-link" href="#/user/${me.user.uid}">プロフィール</a>
-              <a class="set-link" href="#/myposts">自分の投稿</a>
-              <a class="set-link" href="#/account">アカウント</a>
-            </div>` : `
-            <p>身内で記録を見せ合う機能です。まずログインしてください。</p>
-            <a class="btn btn-primary btn-block" href="#/account">ログイン</a>`}
-        </div>
+      <h2 class="section-title">バックアップ</h2>
+      <p>記録はこの端末の中にだけ保存されています。機種変更やアプリの削除に備えて、ときどき書き出しておきましょう。</p>
+      <button type="button" class="btn btn-primary btn-block" id="export">バックアップを作成</button>
+      <div id="export-ready" hidden>
+        <p class="hint" id="export-info"></p>
+        <button type="button" class="btn btn-primary btn-block" id="export-save">ファイルとして保存</button>
       </div>
+
+      <label class="btn btn-ghost btn-block">
+        バックアップから復元
+        <input type="file" id="import" accept=".json,application/json" class="visually-hidden">
+      </label>
+      <p class="hint">復元すると、今の記録はすべてバックアップの内容に置き換わります。</p>
+
+      <h2 class="section-title">保存状況</h2>
+      <p>お店 ${shops.length}店　記録 ${records.length}件<span id="usage"></span></p>
+
+      <h2 class="section-title">みんなに共有</h2>
+      <p>身内で記録を見せ合う機能です。まずログインしてください。</p>
+      <a class="btn btn-ghost btn-block" href="#/account">アカウント</a>
+
+      <h2 class="section-title">共有した記録から復元</h2>
+      <p class="hint">ホーム画面のアイコンを消して入れ直すと、端末の中の記録は消えてしまいます。みんなに共有した分だけは、ここから端末に戻せます。</p>
+      <button type="button" class="btn btn-ghost btn-block" id="restore-shared">共有した記録を端末に戻す</button>
 
       ${me.user ? `
-      <div class="set-group" id="set-notif">
-        <h2 class="set-group-title">通知</h2>
-        <div class="set-card">
-          <p class="hint" id="notif-state">確認しています…</p>
-          <button type="button" class="btn btn-ghost btn-block" id="notif-enable" hidden>通知を有効にする</button>
-          <div id="notif-toggles" hidden>
-            <p class="set-sub">受け取る通知</p>
-            <label class="check-row"><input type="checkbox" id="notif-post"> 身内が新しく共有したとき</label>
-            <label class="check-row"><input type="checkbox" id="notif-guilty"> 自分の投稿にギルティが付いたとき</label>
-            <label class="check-row"><input type="checkbox" id="notif-comment"> 自分の投稿にコメントが付いたとき</label>
-            <label class="check-row"><input type="checkbox" id="notif-follow"> 誰かにフォローされたとき</label>
-          </div>
-        </div>
+      <h2 class="section-title">通知</h2>
+      <p class="hint" id="notif-state">確認しています…</p>
+      <button type="button" class="btn btn-ghost btn-block" id="notif-enable" hidden>通知を有効にする</button>
+      <div id="notif-toggles" hidden>
+        <label class="check-row"><input type="checkbox" id="notif-post"> 身内が新しく共有したとき</label>
+        <label class="check-row"><input type="checkbox" id="notif-guilty"> 自分の投稿にギルティが付いたとき</label>
+        <label class="check-row"><input type="checkbox" id="notif-comment"> 自分の投稿にコメントがついたとき</label>
       </div>` : ''}
 
-      <div class="set-group" id="set-data">
-        <h2 class="set-group-title">データ</h2>
-        <div class="set-card">
-          <h3 class="set-sub">保存状況</h3>
-          <p class="set-stat">お店 <strong>${shops.length}</strong>店　記録 <strong>${records.length}</strong>件<span id="usage"></span></p>
-        </div>
-        <div class="set-card">
-          <h3 class="set-sub">バックアップ</h3>
-          <p class="hint">記録はこの端末の中にだけ保存されています。機種変更やアプリの削除に備えて、ときどき書き出しておきましょう。</p>
-          <button type="button" class="btn btn-primary btn-block" id="export">バックアップを作成</button>
-          <div id="export-ready" hidden>
-            <p class="hint" id="export-info"></p>
-            <button type="button" class="btn btn-primary btn-block" id="export-save">ファイルとして保存</button>
-          </div>
-          <label class="btn btn-ghost btn-block">
-            バックアップから復元
-            <input type="file" id="import" accept=".json,application/json" class="visually-hidden">
-          </label>
-          <p class="hint">復元すると、今の記録はすべてバックアップの内容に置き換わります。</p>
-        </div>
-        <div class="set-card">
-          <h3 class="set-sub">共有した記録から復元</h3>
-          <p class="hint">ホーム画面のアイコンを消して入れ直すと、端末の中の記録は消えてしまいます。みんなに共有した分だけは、ここから端末に戻せます。</p>
-          <button type="button" class="btn btn-ghost btn-block" id="restore-shared">共有した記録を端末に戻す</button>
-        </div>
-      </div>
+      <h2 class="section-title">アプリの更新</h2>
+      <p class="hint" id="update-state">今の版：${APP_VERSION}</p>
+      <button type="button" class="btn btn-ghost btn-block" id="update-btn">最新版があるか確認</button>
 
-      <div class="set-group" id="set-app">
-        <h2 class="set-group-title">アプリ</h2>
-        <div class="set-card">
-          <h3 class="set-sub">アプリの更新</h3>
-          <p class="hint" id="update-state">今の版：${APP_VERSION}</p>
-          <button type="button" class="btn btn-ghost btn-block" id="update-btn">最新版があるか確認</button>
-          <div class="set-links">
-            <a class="set-link" href="#/news">お知らせ（更新内容）</a>
-          </div>
+      <h2 class="section-title">コード</h2>
+      <div class="field">
+        <label for="redeem-code">コードを入力</label>
+        <div class="redeem-row">
+          <input id="redeem-code" type="text" autocomplete="off" autocapitalize="characters" placeholder="コードを入力">
+          <button type="button" class="btn btn-ghost" id="redeem-btn">使う</button>
         </div>
-      </div>
-
-      <div class="set-group" id="set-other">
-        <h2 class="set-group-title">その他</h2>
-        <div class="set-card">
-          <div class="field">
-            <label for="redeem-code">コードを入力</label>
-            <div class="redeem-row">
-              <input id="redeem-code" type="text" autocomplete="off" autocapitalize="characters" placeholder="コードを入力">
-              <button type="button" class="btn btn-ghost" id="redeem-btn">使う</button>
-            </div>
-            <p class="form-error" id="redeem-error" role="alert"></p>
-          </div>
-        </div>
+        <p class="form-error" id="redeem-error" role="alert"></p>
       </div>
     </section>`;
-
-  // 上の項目名を押したら、その場所まで滑らかに送る（URLの#は画面の切り替えに使っているので変えない）
-  app.querySelector('.set-nav').addEventListener('click', (event) => {
-    const link = event.target.closest('[data-jump]');
-    if (!link) return;
-    const target = document.getElementById(link.dataset.jump);
-    if (!target) return;
-    const top = target.getBoundingClientRect().top + window.scrollY - 64;
-    window.scrollTo({ top, behavior: 'smooth' });
-  });
 
   navigator.storage?.estimate?.()
     .then(({ usage }) => {
@@ -4282,7 +3949,6 @@ async function renderSettings() {
       ['notif-post', 'notifyOnPost'],
       ['notif-guilty', 'notifyOnGuilty'],
       ['notif-comment', 'notifyOnComment'],
-      ['notif-follow', 'notifyOnFollow'],
     ].forEach(([elId, field]) => {
       const checkbox = $(`#${elId}`);
       checkbox.checked = me.profile?.[field] !== false;
@@ -4610,7 +4276,6 @@ function shareErrorMessage(err) {
 /* ===================== アカウント（ログイン・プロフィール） ===================== */
 
 async function renderAccount() {
-  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   // プロフィール画面から開くので、戻り先もそこに合わせる
   const accountBack = me.user
     ? { back: `#/user/${me.user.uid}`, backLabel: 'プロフィール' }
@@ -4639,7 +4304,6 @@ async function renderAccount() {
     handled = true;
     clearTimeout(slowTimer);
     unsubscribe();
-    if (!alive()) return;
     if (!user) {
       renderLoginForm(slot);
       return;
@@ -4656,7 +4320,6 @@ async function renderAccount() {
     } catch (err) {
       console.error(err);
     }
-    if (!alive()) return;
     renderProfileForm(slot, user, profile, myCount);
   });
 }
@@ -4914,8 +4577,6 @@ const routes = [
   { path: /^\/recommend$/, view: renderRecommend },
   { path: /^\/nearby$/, view: renderNearby },
   { path: /^\/news$/, view: renderNews },
-  { path: /^\/myposts$/, view: renderMyPosts },
-  { path: /^\/about-chiki$/, view: renderAboutChiki },
 ];
 
 // 進んだのか戻ったのかを見分けるため、ホームからの遠さを数えておく
@@ -4954,19 +4615,7 @@ function playPageIn(back) {
   app.classList.add(back ? 'page-back' : 'page-in');
 }
 
-// 画面を切り替えるたびに1つ増える番号。
-// 読み込みに時間がかかる画面で、待っている間に別の画面へ移っていたら、
-// あとから届いた結果で今の画面を上書きしないようにするために使う。
-// （以前は、プロフィールの読み込み中にホームへ戻ると、あとからプロフィールが
-//   描き込まれ、URLはホームのままなので「戻る」が効かなくなっていた）
-let navSeq = 0;
-function navGuard() {
-  const seq = navSeq;
-  return () => seq === navSeq;
-}
-
 async function router() {
-  const seq = ++navSeq;
   // 前の画面がFirebaseを見張ったままにならないよう、毎回止めてから進む
   stopFeed();
   stopPost();
@@ -4982,12 +4631,10 @@ async function router() {
       await route.view({ id: match[1], query });
     } catch (err) {
       console.error(err);
-      if (seq !== navSeq) return;
       app.innerHTML = header('エラー') + `
         <p class="empty">データを読み込めませんでした。アプリを開き直してください。<br>
         <small>${esc(err.message)}</small></p>`;
     }
-    if (seq !== navSeq) return; // 待っている間に別の画面へ移っていた
     const depth = depthOf(path);
     playPageIn(depth < lastDepth);
     lastDepth = depth;
