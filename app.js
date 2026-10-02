@@ -11,6 +11,9 @@
 //   #/settings    設定（バックアップ・通知・アプリの更新など）
 //   #/myposts     自分が共有した記録の一覧
 //   #/about-chiki ギルチキについて（ガチャ画面から開く）
+//   #/points      ポイント履歴（ガチャ画面から開く）
+//   #/search      ユーザーを探す（みんなの記録から開く）
+//   #/news/v46    お知らせ1件の詳細（お知らせの一覧から開く）
 // =====================================================
 
 import * as db from './db.js';
@@ -57,6 +60,37 @@ function toast(message) {
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
+}
+
+// ── できたことの知らせ（画面上部のバナー） ──────────────────────
+// 記録や共有ができたことを、画面の上にしばらく出す。
+// 下の小さなお知らせ（toast）は画面が切り替わる間に見逃しやすかったので、
+// 大事な「できた」はこちらで知らせる。タップするか、数秒で消える。
+// lines: [{ ok: true/false, text }] … チェック付きの行（共有できたかどうかなど）
+let doneTimer;
+function showDoneBanner({ title, sub = '', lines = [] }) {
+  document.getElementById('done-banner')?.remove();
+  clearTimeout(doneTimer);
+  const el = document.createElement('div');
+  el.id = 'done-banner';
+  el.className = 'done-banner';
+  el.setAttribute('role', 'status');
+  el.innerHTML = `
+    <img class="done-chiki" src="./giruchiki.png" alt="" draggable="false">
+    <span class="done-body">
+      <span class="done-title">${esc(title)}</span>
+      ${sub ? `<span class="done-sub">${esc(sub)}</span>` : ''}
+      ${lines.map((l) => `<span class="done-line${l.ok ? '' : ' is-ng'}">${l.ok ? '✓' : '!'} ${esc(l.text)}</span>`).join('')}
+    </span>`;
+  document.body.appendChild(el);
+  navigator.vibrate?.(12);
+  const hide = () => {
+    clearTimeout(doneTimer);
+    el.classList.add('is-leaving');
+    setTimeout(() => el.remove(), 300);
+  };
+  el.addEventListener('click', hide);
+  doneTimer = setTimeout(hide, 4500);
 }
 
 // ── 通ってきた道すじ ──────────────────────────────────────────
@@ -120,6 +154,8 @@ const SCREEN_NAMES = {
   '/news': 'お知らせ',
   '/myposts': '自分の投稿',
   '/about-chiki': 'ギルチキについて',
+  '/search': 'ユーザーを探す',
+  '/points': 'ポイント履歴',
 };
 
 // お店の画面のように、見出しがそのつど変わる画面では undefined を返す（見出しをそのまま使う）
@@ -402,7 +438,7 @@ cloud.watchAuth(async (user) => {
   if (user) profileCache.set(user.uid, me.profile);
   // ログイン状態で見た目が変わる画面だけ描き直す
   const path = (location.hash.slice(1) || '/').split('?')[0];
-  if (path === '/' || path === '/feed' || path === '/myposts'
+  if (path === '/' || path === '/feed' || path === '/myposts' || path === '/search'
     || path.startsWith('/post/') || path.startsWith('/user/') || path.startsWith('/follows/')) router();
 });
 
@@ -929,13 +965,13 @@ async function maybeCelebrateBadge() {
   }
 }
 
-let chikiState = { points: 0, lastFed: null, owned: [], equipped: null, redeemedCodes: [] };
+let chikiState = { points: 0, lastFed: null, owned: [], equipped: null, redeemedCodes: [], pointLog: [] };
 let chikiReady = false;
 
 async function loadChikiState() {
   try {
     const saved = await db.get('chiki', 'me');
-    if (saved) chikiState = { points: 0, lastFed: null, owned: [], equipped: null, redeemedCodes: [], ...saved };
+    if (saved) chikiState = { points: 0, lastFed: null, owned: [], equipped: null, redeemedCodes: [], pointLog: [], ...saved };
   } catch (err) {
     console.error(err);
   }
@@ -944,6 +980,21 @@ async function loadChikiState() {
 
 function saveChikiState() {
   return db.put('chiki', { id: 'me', ...chikiState });
+}
+
+// ── ポイントの履歴 ──────────────────────────────
+// もらった・使ったポイントを新しい順に残しておく（#/points で見られる）。
+// 端末の中に置くだけなので、増えすぎないよう新しいほうから決まった件数だけ残す。
+const POINT_LOG_MAX = 300;
+
+// 履歴の1件を作る。amount はもらったらプラス、使ったらマイナス
+function pointEntry(amount, label) {
+  return { at: Date.now(), amount, label };
+}
+
+// 履歴に足した新しい配列を返す（chikiState の書き換えは呼び出し側でまとめて行う）
+function withPointLog(...entries) {
+  return [...entries.reverse(), ...(chikiState.pointLog ?? [])].slice(0, POINT_LOG_MAX);
 }
 
 function fedToday() {
@@ -976,7 +1027,12 @@ function weightedPick(items) {
 async function feedChiki() {
   if (fedToday()) return null;
   const amount = weightedPick(FEED_REWARDS).amount;
-  chikiState = { ...chikiState, points: chikiState.points + amount, lastFed: todayStr() };
+  chikiState = {
+    ...chikiState,
+    points: chikiState.points + amount,
+    lastFed: todayStr(),
+    pointLog: withPointLog(pointEntry(amount, 'ギルチキに餌をあげた')),
+  };
   await saveChikiState();
   return amount;
 }
@@ -1001,6 +1057,7 @@ async function redeemCode(input) {
     ...chikiState,
     points: chikiState.points + amount,
     redeemedCodes: [...chikiState.redeemedCodes, code],
+    pointLog: withPointLog(pointEntry(amount, '引き換えコードを使った')),
   };
   await saveChikiState();
   return { amount, reason: null };
@@ -1018,9 +1075,12 @@ async function drawGacha() {
   }
   const already = chikiState.owned.includes(got.id);
   const refund = already ? 5 : 0; // ダブりは少しだけポイントが戻る
+  const log = [pointEntry(-GACHA_COST, `ガチャを引いた（${got.name}）`)];
+  if (refund) log.push(pointEntry(refund, `ダブりのお返し（${got.name}）`));
   chikiState = {
     ...chikiState,
     points: chikiState.points - GACHA_COST + refund,
+    pointLog: withPointLog(...log),
     owned: already ? chikiState.owned : [...chikiState.owned, got.id],
     equipped: chikiState.equipped ?? got.id,
   };
@@ -1353,15 +1413,18 @@ async function renderNews() {
       ${CHANGELOG.length ? '' : '<p class="empty">まだお知らせはありません。</p>'}
       <ul class="news-list">
         ${CHANGELOG.map((entry, i) => `
-          <li class="news-item${i < unreadCount ? ' is-unread' : ''}">
-            <div class="news-head">
-              <span class="news-title">${esc(entry.title)}</span>
-              ${i < unreadCount ? '<span class="news-new">NEW</span>' : ''}
-            </div>
-            <span class="news-meta">${esc(entry.date)}　${esc(entry.version.replace('ramen-log-', ''))}</span>
-            <ul class="news-points">
-              ${entry.items.map((t) => `<li>${esc(t)}</li>`).join('')}
-            </ul>
+          <li>
+            <a class="news-item${i < unreadCount ? ' is-unread' : ''}" href="#/news/${esc(shortVersion(entry.version))}">
+              <span class="news-ver">${esc(shortVersion(entry.version))}</span>
+              <span class="news-lines">
+                <span class="news-head">
+                  <span class="news-title">${esc(entry.title)}</span>
+                  ${i < unreadCount ? '<span class="news-new">NEW</span>' : ''}
+                </span>
+                <span class="news-meta">${esc(newsDate(entry.date))}・${entry.items.length}件の変更</span>
+              </span>
+              <span class="news-go" aria-hidden="true">›</span>
+            </a>
           </li>`).join('')}
       </ul>
       <p class="hint">今お使いの版：${esc(APP_VERSION.replace('ramen-log-', ''))}</p>
@@ -1391,6 +1454,36 @@ async function renderNews() {
   // 開いた時点で既読にする。表示そのものは今の未読のまま残して、
   // 何が新しかったのかをこの画面の中では見えるようにしておく
   if (CHANGELOG.length && read !== CHANGELOG[0]?.version) await markNewsRead();
+}
+
+// '2026-10-02' → '2026年10月2日（金）'。形が違うときはそのまま出す
+function newsDate(str) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(str ?? '') ? formatDate(str) : String(str ?? '');
+}
+
+// お知らせ1件の詳細（#/news/v46）
+async function renderNewsDetail({ id }) {
+  const entry = CHANGELOG.find((e) => shortVersion(e.version) === id);
+  if (!entry) {
+    goReplace('#/news');
+    return;
+  }
+  app.innerHTML = header(shortVersion(entry.version), { back: '#/news', backLabel: 'お知らせ' }) + `
+    <article class="news-detail">
+      <span class="news-ver is-big">${esc(shortVersion(entry.version))}</span>
+      <h2 class="news-detail-title">${esc(entry.title)}</h2>
+      <p class="news-meta">${esc(newsDate(entry.date))}</p>
+      ${entry.lead ? `<p class="news-lead">${esc(entry.lead)}</p>` : ''}
+      <ul class="news-points">
+        ${entry.items.map((t) => {
+          // 「見出し：説明」の形なら、見出しを太字にする
+          const [head, ...rest] = String(t).split('：');
+          return rest.length
+            ? `<li><b>${esc(head)}</b><span>${esc(rest.join('：'))}</span></li>`
+            : `<li><span>${esc(t)}</span></li>`;
+        }).join('')}
+      </ul>
+    </article>`;
 }
 
 /* ===================== おすすめの一杯 ===================== */
@@ -1544,6 +1637,7 @@ async function renderGacha() {
     <div class="gacha-head">
       <div class="gacha-mascot">${mascot(80)}</div>
       <p class="gacha-points">${chikiState.points}<small>pt</small></p>
+      <a class="points-link" href="#/points">ポイント履歴 ›</a>
       <p class="hint">餌をあげるとポイントがもらえる。ホームのギルチキをタップ。</p>
       <a class="about-link" href="#/about-chiki">ギルチキについて</a>
     </div>
@@ -1597,6 +1691,58 @@ async function renderGacha() {
   };
 
   draw();
+}
+
+/* ===================== ポイント履歴（#/points） ===================== */
+
+// 'たった今' '3時間前' のような書き方ではなく、いつのことか分かるよう日時で出す
+function pointWhen(at) {
+  const d = new Date(at);
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+async function renderPoints() {
+  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
+  await loadChikiState();
+  if (!alive()) return;
+
+  const log = chikiState.pointLog ?? [];
+  const gained = log.filter((e) => e.amount > 0).reduce((sum, e) => sum + e.amount, 0);
+  const spent = log.filter((e) => e.amount < 0).reduce((sum, e) => sum - e.amount, 0);
+
+  // 日付ごとにまとめて出す
+  const byDay = new Map();
+  for (const e of log) {
+    const day = toDateStr(new Date(e.at));
+    if (!byDay.has(day)) byDay.set(day, []);
+    byDay.get(day).push(e);
+  }
+
+  app.innerHTML = header('ポイント履歴', { back: '#/gacha', backLabel: 'ガチャ' }) + `
+    <section class="points">
+      <div class="points-now">
+        <span class="points-now-label">今のポイント</span>
+        <span class="gacha-points">${chikiState.points}<small>pt</small></span>
+      </div>
+      ${log.length ? `
+        <dl class="shop-stats">
+          <div><dt>もらった</dt><dd>${gained}<small>pt</small></dd></div>
+          <div><dt>使った</dt><dd>${spent}<small>pt</small></dd></div>
+          <div><dt>件数</dt><dd>${log.length}<small>件</small></dd></div>
+        </dl>` : ''}
+      ${log.length
+        ? [...byDay.entries()].map(([day, entries]) => `
+          <h2 class="section-title">${esc(formatDate(day))}</h2>
+          <ul class="points-list">
+            ${entries.map((e) => `
+              <li class="points-row">
+                <span class="points-label">${esc(e.label)}<small>${esc(pointWhen(e.at))}</small></span>
+                <span class="points-amount${e.amount < 0 ? ' is-minus' : ''}">${e.amount > 0 ? '+' : '−'}${Math.abs(e.amount)}<small>pt</small></span>
+              </li>`).join('')}
+          </ul>`).join('')
+        : '<p class="empty">まだ履歴がありません。ギルチキに餌をあげたり、ガチャを引いたりするとここに残ります。</p>'}
+      <p class="hint">この版（v46）より前の分は記録されていません。履歴はこの端末の中にだけ残り、新しいほうから${POINT_LOG_MAX}件まで見られます。</p>
+    </section>`;
 }
 
 // ガチャの結果を大きく見せる演出
@@ -2294,11 +2440,14 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
   const currentPhotoUrl = record ? await getPhotoUrl(record.photoId) : (saved0?.previewUrl ?? null);
 
   // 一緒に食べた人。ログインしているときだけ選べる
-  const members = me.user ? await loadMembers() : [];
+  const allMembers = me.user ? await loadMembers() : [];
   // 今この記録に付いている人。もう抜けた人が残らないよう、一覧にいる人だけに絞る
   const withUids = new Set(
-    (record?.withUids ?? saved0?.withUids ?? []).filter((uid) => members.some((m) => m.uid === uid)),
+    (record?.withUids ?? saved0?.withUids ?? []).filter((uid) => allMembers.some((m) => m.uid === uid)),
   );
+  // 選べるのはフォローしている人だけ。
+  // ただし、前に付けた人をあとでフォロー解除していても、編集で外れてしまわないよう残しておく
+  const members = allMembers.filter((m) => isFollowing(m.uid) || withUids.has(m.uid));
 
   if (!alive()) return;
   app.innerHTML = header(isEdit ? '記録を編集' : '記録する', { back: 'history' }) + `
@@ -2379,6 +2528,10 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
               <span class="wc-name">${esc(m.nickname ?? '名無し')}</span>
             </button>`).join('')}
         </div>
+      </div>` : allMembers.length ? `
+      <div class="field">
+        <span class="label">一緒に食べた人</span>
+        <p class="hint">フォローしている人がここに並びます。みんなの記録の「ユーザーを探す」からフォローできます。</p>
       </div>` : ''}
 
       ${!isEdit && me.user ? `
@@ -2656,6 +2809,7 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
       // ここで失敗しても記録が消えることはない。
       const shareNow = $('#f-share')?.checked ?? false;
       if (!isEdit && me.user) shareByDefault = shareNow;
+      let shareResult = null; // 共有しなかった:null・できた:true・失敗:false
       if (shareNow) {
         try {
           const postId = await cloud.sharePost({
@@ -2672,10 +2826,11 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
             photo: await photoForShare(saved.photoId),
           });
           await db.put('records', { ...saved, postId });
+          shareResult = true;
           await maybeCelebrateBadge(); // 区切りに届いていたらバッジの演出
         } catch (err) {
           console.error(err);
-          toast('記録はできましたが、共有に失敗しました');
+          shareResult = false;
         }
       }
 
@@ -2715,8 +2870,15 @@ async function renderForm({ record = null, presetShopId = null, presetDate = nul
         if (saved.score < GUILTY) toast(sharedGone ? '変更を保存しました（共有は解除されました）' : '変更を保存しました');
         goBack();
       } else {
-        if (saved.score < GUILTY) toast(`${name}に記録しました（${nth}回目）`);
         goReplace('#/');
+        // ホームに戻ったところで、記録できたこと（と共有できたか）を上に出す
+        showDoneBanner({
+          title: '記録した！',
+          sub: `${name}（${nth}回目）・${saved.score}点`,
+          lines: shareResult === null ? []
+            : shareResult ? [{ ok: true, text: 'みんなにも共有した' }]
+              : [{ ok: false, text: '共有はできなかった。記録の画面からもう一度共有できる' }],
+        });
       }
     } catch (err) {
       console.error(err);
@@ -2966,7 +3128,11 @@ async function deleteSharedPost(postId) {
   }
 }
 
-function postCard(post, { withLastComment = true } = {}) {
+// 一覧では説明文を3行までにして、長いときは「続きを読む」を添える。
+// 詳細画面（full: true）では全文を、改行もそのまま出す
+const POST_COMMENT_PREVIEW = 70; // これより長い（または改行が多い）ときに「続きを読む」を出す
+
+function postCard(post, { withLastComment = true, full = false } = {}) {
   // 写真は押すと直接拡大表示になる。投稿本文への遷移とは別の操作にするため、
   // <a class="post-body"> の中にあってもボタンとして扱う（クリックはJS側で止める）。
   const photo = post.photo
@@ -2975,6 +3141,8 @@ function postCard(post, { withLastComment = true } = {}) {
        </button>`
     : '';
   const comment = (post.comment ?? '').trim();
+  const longComment = !full
+    && (comment.length > POST_COMMENT_PREVIEW || comment.split('\n').length > 3);
   const mine = Boolean(me.user) && post.uid === me.user.uid;
 
   // 一緒に食べた人。名前は投稿時のものではなく、読めていれば最新のものを使う
@@ -3000,14 +3168,16 @@ function postCard(post, { withLastComment = true } = {}) {
         <span class="post-when">${esc(whenText(post.createdAt))}</span>
         ${mine ? `<button type="button" class="post-kebab" data-postmenu="${post.id}" aria-haspopup="true" aria-label="投稿の操作">${kebabIcon()}</button>` : ''}
       </div>
-      <a class="post-body" href="#/post/${post.id}">
+      <a class="post-body${post.photo ? '' : ' no-photo'}" href="#/post/${post.id}">
         ${photo}
         <div class="post-lines">
           <span class="post-shop">${esc(post.shopName)}</span>
           <span class="post-menu">${esc(post.menu)}</span>
-          ${comment ? `<span class="post-comment">${esc(comment)}</span>` : ''}
         </div>
         <span class="post-score${post.score >= GUILTY ? ' is-guilty' : ''}">${post.score}<small>点</small></span>
+        ${comment ? `
+          <span class="post-comment${full ? ' is-full' : ''}">${esc(comment)}</span>
+          ${longComment ? '<span class="post-more">続きを読む</span>' : ''}` : ''}
       </a>
       ${withLine}
       <div class="post-foot">
@@ -3052,7 +3222,8 @@ async function renderFeed() {
   feedTab = 'all';
   const hasFollows = followUids().length > 0;
 
-  app.innerHTML = header('みんなの記録') + (hasFollows ? `
+  app.innerHTML = header('みんなの記録') + `
+    <a class="search-entry" href="#/search">${searchIcon()}<span>ユーザーを探す</span></a>` + (hasFollows ? `
     <div class="feed-tabs" role="tablist">
       <button type="button" class="feed-tab${feedTab === 'all' ? ' is-on' : ''}" data-feedtab="all" role="tab" aria-selected="${feedTab === 'all'}">みんな</button>
       <button type="button" class="feed-tab${feedTab === 'following' ? ' is-on' : ''}" data-feedtab="following" role="tab" aria-selected="${feedTab === 'following'}">フォロー中</button>
@@ -3204,12 +3375,14 @@ function openPhoto(src) {
   host.className = 'viewer';
   host.innerHTML = `
     <button type="button" class="viewer-close" data-close aria-label="閉じる">×</button>
-    <div class="viewer-stage"><img class="viewer-img" src="${src}" alt=""></div>`;
+    <div class="viewer-stage"><img class="viewer-img" src="${src}" alt="" draggable="false"></div>`;
   document.body.appendChild(host);
   document.body.classList.add('no-scroll');
 
   const img = host.querySelector('.viewer-img');
   const stage = host.querySelector('.viewer-stage');
+  // 写真そのものをつまんで持ち出す動き（ブラウザ標準）が始まると、スワイプが途中で切れるので止める
+  stage.addEventListener('dragstart', (event) => event.preventDefault());
   let k = 1;   // 拡大の倍率
   let tx = 0;  // 位置
   let ty = 0;
@@ -3221,10 +3394,24 @@ function openPhoto(src) {
   const points = new Map();
   let pinch = null;
 
+  // 等倍のときに下へスワイプすると閉じる（写真アプリやSNSと同じ操作）。
+  // 指に合わせて写真が下がり、背景が薄くなる。一定以上引くか、素早く払うと閉じる
+  let pull = null;      // { startX, startY, startAt, dy, active }
+  let dragged = false;  // 指を動かした直後のタップ（クリック）を無視するため
+
+  function setPull(dy) {
+    img.style.transform = `translate(0px, ${dy}px) scale(${Math.max(0.85, 1 - dy / 1600)})`;
+    host.style.backgroundColor = `rgba(8, 7, 6, ${Math.max(0.35, 0.97 - dy / 500)})`;
+  }
+
   stage.addEventListener('pointerdown', (event) => {
     stage.setPointerCapture(event.pointerId);
     points.set(event.pointerId, { x: event.clientX, y: event.clientY });
     pinch = null;
+    dragged = false;
+    pull = points.size === 1 && k === 1
+      ? { startX: event.clientX, startY: event.clientY, startAt: Date.now(), dy: 0, active: false }
+      : null;
   });
 
   stage.addEventListener('pointermove', (event) => {
@@ -3233,6 +3420,8 @@ function openPhoto(src) {
     points.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     if (points.size >= 2) {
+      if (pull?.active) { img.style.transition = ''; host.style.backgroundColor = ''; }
+      pull = null; // 2本指になったら、拡大の操作として扱う
       const [a, b] = [...points.values()];
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
       if (pinch) k = Math.max(1, Math.min(5, k * (dist / pinch.dist)));
@@ -3242,13 +3431,52 @@ function openPhoto(src) {
     } else if (k > 1) {
       tx += event.clientX - prev.x;
       ty += event.clientY - prev.y;
+      dragged = true;
       apply();
+    } else if (pull) {
+      const dx = event.clientX - pull.startX;
+      const dy = event.clientY - pull.startY;
+      // 最初の動きが下向きのときだけ「閉じる操作」として始める
+      if (!pull.active) {
+        if (dy > 10 && dy > Math.abs(dx)) {
+          pull.active = true;
+          img.style.transition = 'none';
+        } else if (Math.abs(dx) > 10 || dy < -10) {
+          pull = null;
+          return;
+        } else {
+          return;
+        }
+      }
+      dragged = true;
+      pull.dy = Math.max(0, dy);
+      setPull(pull.dy);
     }
   });
 
   function release(event) {
     points.delete(event.pointerId);
     if (points.size < 2) pinch = null;
+    if (!pull?.active || points.size) return;
+    const { dy, startAt } = pull;
+    pull = null;
+    const speed = dy / Math.max(1, Date.now() - startAt); // 1ミリ秒あたりに動いた距離
+    if (dy > 110 || (dy > 40 && speed > 0.6)) {
+      // 下へ流しながら閉じる
+      img.style.transition = 'transform 0.2s ease-in, opacity 0.2s ease-in';
+      host.style.transition = 'background-color 0.2s ease-in';
+      img.style.transform = `translate(0px, ${window.innerHeight}px) scale(0.85)`;
+      img.style.opacity = '0';
+      host.style.backgroundColor = 'rgba(8, 7, 6, 0)';
+      setTimeout(close, 200);
+    } else {
+      // 引きが足りなければ元の位置に戻す
+      img.style.transition = 'transform 0.2s ease-out';
+      host.style.transition = 'background-color 0.2s ease-out';
+      apply();
+      host.style.backgroundColor = '';
+      setTimeout(() => { img.style.transition = ''; host.style.transition = ''; }, 220);
+    }
   }
   stage.addEventListener('pointerup', release);
   stage.addEventListener('pointercancel', release);
@@ -3256,6 +3484,7 @@ function openPhoto(src) {
   // 画像を2回たたくと、拡大と等倍を行き来する
   let lastTap = 0;
   stage.addEventListener('click', () => {
+    if (dragged) return; // スワイプのあとのタップは数えない
     const now = Date.now();
     if (now - lastTap < 300) {
       k = k > 1 ? 1 : 2.5;
@@ -3272,6 +3501,7 @@ function openPhoto(src) {
   }
 
   host.addEventListener('click', (event) => {
+    if (dragged && !event.target.closest('[data-close]')) return; // スワイプで戻したときは閉じない
     // 画像の外側を押すか、×を押すと閉じる
     if (event.target.closest('[data-close]') || !event.target.closest('.viewer-img')) close();
   });
@@ -3376,7 +3606,7 @@ async function renderPost({ id, query }) {
       await ensureProfiles(post.withUids ?? []);
       if (!document.body.contains(slot)) return;
       thisPost = post;
-      slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false })}</ul>`;
+      slot.innerHTML = `<ul class="post-list">${postCard(post, { withLastComment: false, full: true })}</ul>`;
       restorePop(slot);
       const btn = slot.querySelector('[data-guilty]');
       if (btn) {
@@ -3676,6 +3906,101 @@ async function renderMyPosts() {
 
   // 投稿に書かれた名前やアイコンは投稿した時点のもの。最新が読めたら描き直す
   if (await ensureProfiles(posts.flatMap((p) => [p.uid, p.lastComment?.uid, ...(p.withUids ?? [])]))) draw();
+}
+
+/* ===================== ユーザーを探す（#/search） ===================== */
+
+// 虫めがねのマーク
+function searchIcon() {
+  return `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+    <circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <path d="M12.7 12.7 17 17" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+  </svg>`;
+}
+
+// 名前を比べやすい形にそろえる。
+// 全角・半角、大文字・小文字、カタカナ・ひらがなの違いを無視して探せるようにする
+function searchKey(text) {
+  return String(text ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60))
+    .replace(/\s+/g, '');
+}
+
+let searchWord = ''; // 検索した言葉は、プロフィールを見て戻ってきたときのために覚えておく
+
+async function renderSearch() {
+  const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
+  const title = 'ユーザーを探す';
+  if (!me.ready) {
+    app.innerHTML = header(title, { back: '#/feed', backLabel: 'みんなの記録' }) + '<p class="empty">確認しています…</p>';
+    return; // ログインの確認が終わったら描き直される
+  }
+  if (!me.user) {
+    goReplace('#/feed');
+    return;
+  }
+
+  app.innerHTML = header(title, { back: '#/feed', backLabel: 'みんなの記録' }) + `
+    <section class="search">
+      <label class="search-box">
+        ${searchIcon()}
+        <input id="search-input" type="search" placeholder="名前で探す" autocomplete="off" enterkeyhint="search" value="${esc(searchWord)}">
+      </label>
+      <p class="hint" id="search-count"></p>
+      <ul class="follow-list" id="search-list"><li class="empty">読み込んでいます…</li></ul>
+    </section>`;
+
+  const input = $('#search-input');
+  const list = $('#search-list');
+  const countEl = $('#search-count');
+  let members = null;
+
+  function draw() {
+    if (!alive() || !members) return;
+    const key = searchKey(searchWord);
+    const others = members.filter((m) => m.uid !== me.user.uid);
+    const hits = others
+      .filter((m) => !key || searchKey(m.nickname).includes(key))
+      // フォローしていない人を先に、その中は名前順
+      .sort((a, b) => Number(isFollowing(a.uid)) - Number(isFollowing(b.uid))
+        || String(a.nickname ?? '').localeCompare(String(b.nickname ?? ''), 'ja'));
+
+    countEl.textContent = key ? `${hits.length}人見つかりました` : `全員（${others.length}人）`;
+    list.innerHTML = hits.length
+      ? hits.map((m) => `
+        <li>
+          <a href="#/user/${m.uid}">
+            <span class="follow-avatar"><img src="${avatarOf(m.avatar)}" alt=""></span>
+            <span class="follow-lines">
+              <span class="follow-name">${esc(m.nickname ?? '名無し')}</span>
+              ${(m.bio ?? '').trim() ? `<span class="follow-bio">${esc(m.bio.trim())}</span>` : ''}
+            </span>
+            ${isFollowing(m.uid) ? '<span class="search-tag">フォロー中</span>' : ''}
+          </a>
+        </li>`).join('')
+      : '<li class="empty">見つかりませんでした。</li>';
+  }
+
+  input.addEventListener('input', () => {
+    searchWord = input.value;
+    draw();
+  });
+  // キーボードの「検索」を押したら、キーボードをしまう
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') input.blur();
+  });
+
+  try {
+    members = await cloud.getMembers((cached) => { members = cached; draw(); });
+    members.forEach((m) => { if (!profileCache.has(m.uid)) profileCache.set(m.uid, m); });
+    draw();
+  } catch (err) {
+    console.error(err);
+    if (!alive() || members) return;
+    list.innerHTML = `<li class="empty">${esc(shareErrorMessage(err))}</li>`;
+  }
 }
 
 async function renderFollows({ id, query }) {
@@ -4084,7 +4409,28 @@ function downloadFile(file) {
    新しい版を出すときは、この配列のいちばん上に1件足す。
    version は sw.js の CACHE_NAME と app.js の APP_VERSION に合わせる。
    未読の数は、いちばん上の version を読んだかどうかで数えている。 */
-const CHANGELOG = [];
+//   version … 'ramen-log-v46' の形（画面には 'v46' と出る）
+//   title   … 一覧に出す一言のタイトル
+//   lead    … 詳細画面のいちばん上に出す説明（なくてもよい）
+//   items   … 変更点。「見出し：説明」と書くと、見出しが太字になる
+const CHANGELOG = [
+  {
+    version: 'ramen-log-v46',
+    date: '2026-10-02',
+    title: 'ユーザー検索とポイント履歴を追加',
+    lead: '使い勝手の調整をまとめて行いました。',
+    items: [
+      'ユーザーを探す：みんなの記録のいちばん上から、名前で人を探せるようになりました',
+      'ポイント履歴：ガチャ画面の「ポイント履歴」から、もらった・使ったポイントを見られます（この版からの記録です）',
+      '記録できたお知らせ：記録してホームに戻ったとき、画面の上に「記録した！」と出ます。共有できたかどうかも一緒に出ます',
+      'お知らせの見た目：版ごとにタイトルを付けて並べ、タップすると詳しい内容を見られるようにしました',
+      '返信の通知：自分のコメントに返信が付いたときも通知が届くようになりました',
+      '一緒に食べた人：選べるのがフォローしている人だけになりました',
+      '説明文：みんなの記録で説明文が途中で切れていたのを直しました。長いときは記録を開くと全文を読めます',
+      '写真：みんなの記録で開いた写真を、下にスワイプして閉じられるようになりました',
+    ],
+  },
+];
 
 
 async function newsReadVersion() {
@@ -4110,7 +4456,7 @@ async function markNewsRead() {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v45';
+const APP_VERSION = 'ramen-log-v46';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -4299,7 +4645,7 @@ async function renderSettings() {
             <p class="set-sub">受け取る通知</p>
             <label class="check-row"><input type="checkbox" id="notif-post"> 身内が新しく共有したとき</label>
             <label class="check-row"><input type="checkbox" id="notif-guilty"> 自分の投稿にギルティが付いたとき</label>
-            <label class="check-row"><input type="checkbox" id="notif-comment"> 自分の投稿にコメントが付いたとき</label>
+            <label class="check-row"><input type="checkbox" id="notif-comment"> 自分の投稿へのコメント・自分のコメントへの返信</label>
             <label class="check-row"><input type="checkbox" id="notif-follow"> 誰かにフォローされたとき</label>
           </div>
         </div>
@@ -4699,7 +5045,10 @@ function setupShare(record, shopNameText, shopAddressText) {
         });
         await db.put('records', { ...record, postId });
         record.postId = postId;
-        toast('みんなに共有しました');
+        showDoneBanner({
+          title: 'みんなに共有した！',
+          sub: `${shopNameText}・${record.score}点`,
+        });
         await maybeCelebrateBadge(); // 区切りに届いていたらバッジの演出
       }
       renderEdit({ id: record.id }); // 表示を作り直す
@@ -5081,6 +5430,9 @@ const routes = [
   { path: /^\/recommend$/, view: renderRecommend },
   { path: /^\/nearby$/, view: renderNearby },
   { path: /^\/news$/, view: renderNews },
+  { path: /^\/news\/([\w.-]+)$/, view: renderNewsDetail },
+  { path: /^\/search$/, view: renderSearch },
+  { path: /^\/points$/, view: renderPoints },
   { path: /^\/myposts$/, view: renderMyPosts },
   { path: /^\/about-chiki$/, view: renderAboutChiki },
 ];
