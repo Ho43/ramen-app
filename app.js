@@ -637,7 +637,7 @@ function cropImage(file) {
           <span class="crop-angle" aria-live="polite">0°</span>
           <button type="button" class="crop-reset" data-crop="level" disabled>傾きを戻す</button>
         </div>
-        <p class="crop-hint">1本指で動かす。2本指でつまむと拡大、ひねると回転。<br>左のボタンで90度ずつ回せます。</p>
+        <p class="crop-hint">1本指で動かす。2本指でつまむと拡大、大きくひねると回転。<br>左のボタンで90度ずつ回せます。</p>
       </div>`;
     document.body.appendChild(host);
 
@@ -757,6 +757,15 @@ function cropImage(file) {
     const points = new Map();
     let gesture = null; // 2本指の前回の状態 { dist, angle, mx, my }
 
+    // 拡大したいだけなのに回ってしまわないよう、2本指を置いてからの動きで
+    // 「回す操作」か「拡大する操作」かを見分ける（地図アプリと同じ考え方）。
+    //   ひねりの合計が ROT_START を超えたら → 回転を始める（そこから先は指どおりに回る）
+    //   先に拡大・縮小が ZOOM_LOCK を超えたら → その操作の間は回転しない
+    // 指を離して置き直すたびに、見分け直す
+    const ROT_START = (12 * Math.PI) / 180; // 12°
+    const ZOOM_LOCK = Math.log(1.15);       // 15%の拡大・縮小
+    let session = null; // { twist, zoomLog, rotating, zoomOnly }
+
     function twoFingerState() {
       const [a, b] = [...points.values()];
       const box = stage.getBoundingClientRect();
@@ -772,6 +781,8 @@ function cropImage(file) {
       stage.setPointerCapture(e.pointerId);
       points.set(e.pointerId, { x: e.clientX, y: e.clientY });
       gesture = points.size >= 2 ? twoFingerState() : null;
+      // 2本目の指が置かれたところから、新しい操作として見分け始める
+      if (points.size === 2) session = { twist: 0, zoomLog: 0, rotating: false, zoomOnly: false };
     });
 
     stage.addEventListener('pointermove', (e) => {
@@ -789,10 +800,22 @@ function cropImage(file) {
         if (dRot > Math.PI) dRot -= 2 * Math.PI;   // -180°〜180°をまたいだとき
         if (dRot < -Math.PI) dRot += 2 * Math.PI;
         const pinch = gesture.dist > 0 ? now.dist / gesture.dist : 1;
+
+        // 回す操作かどうかを見分ける。回転が始まるまでは、ひねっても角度は変えない
+        if (session && !session.rotating && !session.zoomOnly) {
+          session.twist += dRot;
+          session.zoomLog += Math.log(pinch);
+          if (Math.abs(session.twist) >= ROT_START) session.rotating = true; // 次の動きから回す
+          else if (Math.abs(session.zoomLog) >= ZOOM_LOCK) session.zoomOnly = true;
+          dRot = 0;
+        } else if (!session?.rotating) {
+          dRot = 0;
+        }
+
         let nk = Math.max(1, Math.min(maxK(rot + dRot), k * pinch));
         // 枠が埋まった状態で回したときは、隙間が出ないところまで自動で拡大する
         // （自分で縮めているときは、その操作を優先する）
-        if (covered && pinch >= 0.999) nk = Math.max(nk, coverK(rot + dRot));
+        if (covered && dRot !== 0 && pinch >= 0.999) nk = Math.max(nk, coverK(rot + dRot));
         // 指の真ん中を中心に回して拡大し、指の真ん中が動いたぶんだけ一緒に動かす
         transformAround(gesture.mx, gesture.my, nk / k, dRot);
         cx += now.mx - gesture.mx;
@@ -812,6 +835,7 @@ function cropImage(file) {
       points.delete(e.pointerId);
       // 指が1本に減ったら、そこからはドラッグとして続ける
       gesture = points.size >= 2 ? twoFingerState() : null;
+      if (points.size < 2) session = null;
     }
     stage.addEventListener('pointerup', release);
     stage.addEventListener('pointercancel', release);
