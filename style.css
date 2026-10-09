@@ -3515,3 +3515,157 @@ body.gate-open { overflow: hidden; }
   color: var(--negi);
 }
 .done-line.is-ng { color: #E0806F; }
+
+/* ===== 返信の入力欄（返信先のコメントの下に開く） ===== */
+.comment-form-foot { justify-content: flex-end; }
+
+.comment-reply-slot {
+  margin-left: 34px;
+  padding: 4px 0 12px 12px;
+  border-left: 2px solid var(--yolk-dark);
+  border-bottom: 1px solid var(--line);
+}
+
+.comment-reply-slot .comment-form { margin-top: 4px; }
+
+.reply-to {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--yolk);
+}
+.reply-to[hidden] { display: none; }
+
+/* 返信の返信で、誰あてかを示す「@名前」 */
+.comment-to {
+  color: var(--yolk);
+  font-weight: 700;
+}
+
+/* ===== 切り抜き：回転 ===== */
+.crop-rotate { margin-top: -6px; }
+
+.crop-turn {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--cream);
+  cursor: pointer;
+}
+.crop-turn:active { transform: scale(0.94); background: var(--surface-2); }
+
+/* 今の角度 */
+.crop-angle {
+  flex: 1;
+  color: var(--cream);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* 傾きをまっすぐに戻す */
+.crop-reset {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--cream);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.crop-reset:disabled { opacity: 0.35; cursor: default; }
+
+/* ===== ほかの人の図鑑：最高点とタップ ===== */
+.zk-card.is-link:active { transform: scale(0.98); background: var(--surface-2); }
+
+.zk-best {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.zk-best b {
+  font-family: var(--mincho);
+  font-size: 17px;
+  color: var(--yolk);
+}
+.zk-best.is-guilty b { color: var(--shu); }
+
+/* ===== プロフィール：共有した記録の一覧への入口 ===== */
+.user-posts-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 16px 0 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--yolk-dark);
+  border-radius: 10px;
+  background: rgba(242, 160, 7, 0.08);
+  color: var(--cream);
+  font-weight: 700;
+  text-decoration: none;
+}
+.user-posts-link small {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.user-posts-link:active { background: var(--surface-2); }
+
+/* ===== 共有した記録：並び替え（横にスクロールできるチップ） ===== */
+.sort-chips {
+  display: flex;
+  gap: 8px;
+  margin: 16px -16px 14px;
+  padding: 0 16px 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.sort-chips::-webkit-scrollbar { display: none; }
+
+.sort-chip {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.sort-chip.is-on {
+  border-color: var(--yolk);
+  background: var(--yolk);
+  color: #3A2405;
+}
+
+/* 図鑑から来たとき：「〇〇の記録だけ表示中」 */
+.posts-filter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13px;
+}
+.posts-filter-clear {
+  flex-shrink: 0;
+  color: var(--yolk);
+  font-weight: 700;
+  text-decoration: none;
+}

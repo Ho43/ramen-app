@@ -10,6 +10,7 @@
 //   #/edit/ID     記録の編集・削除
 //   #/settings    設定（バックアップ・通知・アプリの更新など）
 //   #/myposts     自分が共有した記録の一覧
+//   #/posts/UID   その人が共有した記録の一覧（?shop=店名 でその店だけ）
 //   #/about-chiki ギルチキについて（ガチャ画面から開く）
 //   #/points      ポイント履歴（ガチャ画面から開く）
 //   #/search      ユーザーを探す（みんなの記録から開く）
@@ -166,6 +167,7 @@ function screenName(route) {
     return new URLSearchParams(queryString).get('type') === 'followers' ? 'フォロワー' : 'フォロー中';
   }
   if (path.startsWith('/user/')) return 'プロフィール';
+  if (path.startsWith('/posts/')) return new URLSearchParams(queryString).get('shop') ? 'お店の記録' : '共有した記録';
   if (path.startsWith('/post/')) return '記録';
   if (path.startsWith('/edit/')) return '記録';
   return SCREEN_NAMES[path];
@@ -439,7 +441,7 @@ cloud.watchAuth(async (user) => {
   // ログイン状態で見た目が変わる画面だけ描き直す
   const path = (location.hash.slice(1) || '/').split('?')[0];
   if (path === '/' || path === '/feed' || path === '/myposts' || path === '/search'
-    || path.startsWith('/post/') || path.startsWith('/user/') || path.startsWith('/follows/')) router();
+    || path.startsWith('/post/') || path.startsWith('/posts/') || path.startsWith('/user/') || path.startsWith('/follows/')) router();
 });
 
 const myName = () => me.profile?.nickname ?? me.user?.email?.split('@')[0] ?? '名無し';
@@ -606,6 +608,8 @@ function cropImage(file) {
       URL.revokeObjectURL(url);
       resolve(null);
       return;
+    } finally {
+      URL.revokeObjectURL(url); // 読み込めたら、もう要らない
     }
 
     const host = document.createElement('div');
@@ -617,63 +621,157 @@ function cropImage(file) {
         <button type="button" class="crop-btn is-ok" data-crop="ok">決定</button>
       </div>
       <div class="crop-body">
-        <div class="crop-stage"><img class="crop-img" alt=""></div>
+        <div class="crop-stage"><canvas class="crop-img"></canvas></div>
         <div class="crop-tools">
           <button type="button" class="step" data-crop="out" aria-label="縮小">−</button>
           <input class="crop-zoom" type="range" min="1" max="4" step="0.01" value="1" aria-label="拡大">
           <button type="button" class="step" data-crop="in" aria-label="拡大">＋</button>
         </div>
-        <p class="crop-hint">指でドラッグすると動かせます。2本指またはスライダーで拡大できます。</p>
+        <div class="crop-tools crop-rotate">
+          <button type="button" class="crop-turn" data-crop="turn" aria-label="左に90度回す">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+              <path d="M7.5 7.5A7 7 0 1 1 5 13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+              <path d="M7.8 3.2v4.6H3.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <span class="crop-angle" aria-live="polite">0°</span>
+          <button type="button" class="crop-reset" data-crop="level" disabled>傾きを戻す</button>
+        </div>
+        <p class="crop-hint">1本指で動かす。2本指でつまむと拡大、ひねると回転。<br>左のボタンで90度ずつ回せます。</p>
       </div>`;
     document.body.appendChild(host);
 
     const stage = host.querySelector('.crop-stage');
-    const view = host.querySelector('.crop-img');
+    const view = host.querySelector('.crop-img'); // 写真を描いたキャンバス。CSSで動かす・回す
     const zoom = host.querySelector('.crop-zoom');
-    view.src = url;
+    const angleEl = host.querySelector('.crop-angle');
+    const levelBtn = host.querySelector('[data-crop="level"]');
 
-    const S = stage.clientWidth;            // 枠の一辺（画面上の大きさ）
-    const nw = img.naturalWidth;
-    const nh = img.naturalHeight;
-    // 倍率1のときに写真全体がちょうど収まるようにする
+    const S = stage.clientWidth; // 枠の一辺（画面上の大きさ）
+    const F = S / 2;             // 枠の中心（縦横とも）
+
+    // 大きすぎる写真は動かすたびに重くなるので、長辺を MAX_SRC に縮めてから扱う
+    // （書き出しは1024pxなので、4倍まで拡大してもこれで足りる）
+    const MAX_SRC = 2048;
+    const srcScale = Math.min(1, MAX_SRC / Math.max(img.naturalWidth, img.naturalHeight));
+    const nw = Math.max(1, Math.round(img.naturalWidth * srcScale));
+    const nh = Math.max(1, Math.round(img.naturalHeight * srcScale));
+    view.width = nw;
+    view.height = nh;
+    view.style.transformOrigin = '50% 50%'; // 写真の真ん中を軸に回す
+    view.getContext('2d').drawImage(img, 0, 0, nw, nh);
+
+    // 倍率1のときに（回していない）写真全体がちょうど収まるようにする
     const base = Math.min(S / nw, S / nh);
 
-    let k = 1;    // 拡大の倍率
-    let tx = 0;   // 写真の左上が枠のどこにあるか
-    let ty = 0;
+    // 写真の状態。角度に制限はなく、指でひねったぶんだけ回る
+    let k = 1;      // 拡大の倍率（1〜4）
+    let rot = 0;    // 回転（ラジアン、右回りが正）
+    let cx = F;     // 写真の中心が枠のどこにあるか
+    let cy = F;
 
-    function apply() {
-      const w = nw * base * k;
-      const h = nh * base * k;
-      // 枠より小さい向きは中央に、大きい向きは枠の外に隙間ができないように収める
-      tx = w <= S ? (S - w) / 2 : Math.min(0, Math.max(S - w, tx));
-      ty = h <= S ? (S - h) / 2 : Math.min(0, Math.max(S - h, ty));
-      view.style.width = `${w}px`;
-      view.style.height = `${h}px`;
-      view.style.transform = `translate(${tx}px, ${ty}px)`;
-      zoom.value = k;
+    const W = () => nw * base * k; // 画面上の写真の幅・高さ（回す前）
+    const H = () => nh * base * k;
+
+    // 角度 rot のとき、枠を写真の向きに合わせて見たときの「半分の幅」
+    const frameHalf = (r) => F * (Math.abs(Math.cos(r)) + Math.abs(Math.sin(r)));
+    // 角度 rot で枠が写真からはみ出さない（四隅に隙間が出ない）最小の倍率
+    const coverK = (r) => (2 * frameHalf(r)) / (Math.min(nw, nh) * base);
+    // 拡大の上限。ふだんは4倍、細長い写真を大きく傾けたときは埋めるのに必要なぶんまで
+    const maxK = (r) => Math.max(4, coverK(r));
+    // 今、枠の中が写真で埋まっているか
+    const isCovered = () => Math.min(W(), H()) >= 2 * frameHalf(rot) - 0.5;
+
+    // 写真が枠から外れすぎないように位置を直す。
+    // 写真の向きにそろえた座標で考えると、縦横それぞれ単純な範囲の問題になる：
+    //   写真のほうが大きい向き → 枠の外に隙間ができない範囲で動かせる
+    //   写真のほうが小さい向き → 真ん中にそろえる（回していないときの動きと同じ）
+    function clampPosition() {
+      const cos = Math.cos(rot);
+      const sin = Math.sin(rot);
+      const ox = cx - F;
+      const oy = cy - F;
+      let u = ox * cos + oy * sin;   // 写真の向きで見た横のずれ
+      let v = -ox * sin + oy * cos;  // 写真の向きで見た縦のずれ
+      const E = frameHalf(rot);
+      const hw = W() / 2;
+      const hh = H() / 2;
+      u = hw >= E ? Math.max(-(hw - E), Math.min(hw - E, u)) : 0;
+      v = hh >= E ? Math.max(-(hh - E), Math.min(hh - E, v)) : 0;
+      cx = F + u * cos - v * sin;
+      cy = F + u * sin + v * cos;
     }
 
-    // 指定した点を動かさずに拡大率だけ変える
-    function zoomTo(next, cx = S / 2, cy = S / 2) {
-      const clamped = Math.max(1, Math.min(4, next));
-      const ratio = clamped / k;
-      tx = cx - (cx - tx) * ratio;
-      ty = cy - (cy - ty) * ratio;
+    // 角度の表示（-180〜180°）
+    function angleDeg() {
+      let d = (rot * 180) / Math.PI;
+      d = ((d % 360) + 540) % 360 - 180;
+      return Math.round(d * 10) / 10;
+    }
+
+    function apply() {
+      clampPosition();
+      view.style.width = `${W()}px`;
+      view.style.height = `${H()}px`;
+      view.style.transform = `translate(${cx - W() / 2}px, ${cy - H() / 2}px) rotate(${rot}rad)`;
+      zoom.value = k;
+      const d = angleDeg();
+      angleEl.textContent = `${d > 0 ? '+' : ''}${d}°`;
+      levelBtn.disabled = Math.abs(d % 90) < 0.05;
+    }
+
+    // 点 (px, py) を動かさずに、倍率を ratio 倍・角度を dRot だけ変える
+    function transformAround(px, py, ratio, dRot) {
+      const cos = Math.cos(dRot);
+      const sin = Math.sin(dRot);
+      const dx = (cx - px) * ratio;
+      const dy = (cy - py) * ratio;
+      cx = px + dx * cos - dy * sin;
+      cy = py + dx * sin + dy * cos;
+    }
+
+    // 枠の真ん中を中心に拡大率だけ変える（スライダー・＋−ボタン）
+    function zoomTo(next) {
+      const clamped = Math.max(1, Math.min(maxK(rot), next));
+      transformAround(F, F, clamped / k, 0);
       k = clamped;
+      apply();
+    }
+
+    // 角度を変える。枠が写真で埋まっていたなら、回したあとも埋まるよう少し拡大する
+    function rotateTo(next, px = F, py = F) {
+      const covered = isCovered();
+      transformAround(px, py, 1, next - rot);
+      rot = next;
+      if (covered && k < coverK(rot)) {
+        const nk = coverK(rot);
+        transformAround(F, F, nk / k, 0);
+        k = nk;
+      }
       apply();
     }
 
     apply();
 
-    // --- 指の操作（1本でドラッグ、2本でつまんで拡大） ---
+    // --- 指の操作（1本でドラッグ、2本でつまむ・ひねる） ---
     const points = new Map();
-    let pinch = null;
+    let gesture = null; // 2本指の前回の状態 { dist, angle, mx, my }
+
+    function twoFingerState() {
+      const [a, b] = [...points.values()];
+      const box = stage.getBoundingClientRect();
+      return {
+        dist: Math.hypot(b.x - a.x, b.y - a.y),
+        angle: Math.atan2(b.y - a.y, b.x - a.x),
+        mx: (a.x + b.x) / 2 - box.left,
+        my: (a.y + b.y) / 2 - box.top,
+      };
+    }
 
     stage.addEventListener('pointerdown', (e) => {
       stage.setPointerCapture(e.pointerId);
       points.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      pinch = null;
+      gesture = points.size >= 2 ? twoFingerState() : null;
     });
 
     stage.addEventListener('pointermove', (e) => {
@@ -683,23 +781,37 @@ function cropImage(file) {
       points.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
       if (points.size >= 2) {
-        const [a, b] = [...points.values()];
-        const dist = Math.hypot(a.x - b.x, a.y - b.y);
-        const box = stage.getBoundingClientRect();
-        const cx = (a.x + b.x) / 2 - box.left;
-        const cy = (a.y + b.y) / 2 - box.top;
-        if (pinch) zoomTo(k * (dist / pinch.dist), cx, cy);
-        pinch = { dist };
+        const now = twoFingerState();
+        if (!gesture) { gesture = now; return; }
+        const covered = isCovered();
+        // 指の間の距離の変化 → 拡大、指を結ぶ線の向きの変化 → 回転
+        let dRot = now.angle - gesture.angle;
+        if (dRot > Math.PI) dRot -= 2 * Math.PI;   // -180°〜180°をまたいだとき
+        if (dRot < -Math.PI) dRot += 2 * Math.PI;
+        const pinch = gesture.dist > 0 ? now.dist / gesture.dist : 1;
+        let nk = Math.max(1, Math.min(maxK(rot + dRot), k * pinch));
+        // 枠が埋まった状態で回したときは、隙間が出ないところまで自動で拡大する
+        // （自分で縮めているときは、その操作を優先する）
+        if (covered && pinch >= 0.999) nk = Math.max(nk, coverK(rot + dRot));
+        // 指の真ん中を中心に回して拡大し、指の真ん中が動いたぶんだけ一緒に動かす
+        transformAround(gesture.mx, gesture.my, nk / k, dRot);
+        cx += now.mx - gesture.mx;
+        cy += now.my - gesture.my;
+        k = nk;
+        rot += dRot;
+        gesture = now;
+        apply();
       } else {
-        tx += e.clientX - prev.x;
-        ty += e.clientY - prev.y;
+        cx += e.clientX - prev.x;
+        cy += e.clientY - prev.y;
         apply();
       }
     });
 
     function release(e) {
       points.delete(e.pointerId);
-      if (points.size < 2) pinch = null;
+      // 指が1本に減ったら、そこからはドラッグとして続ける
+      gesture = points.size >= 2 ? twoFingerState() : null;
     }
     stage.addEventListener('pointerup', release);
     stage.addEventListener('pointercancel', release);
@@ -710,7 +822,6 @@ function cropImage(file) {
     function finish(blob) {
       document.body.classList.remove('no-scroll');
       host.remove();
-      URL.revokeObjectURL(url);
       resolve(blob);
     }
 
@@ -719,6 +830,12 @@ function cropImage(file) {
       if (!action) return;
       if (action === 'in') { zoomTo(k + 0.25); return; }
       if (action === 'out') { zoomTo(k - 0.25); return; }
+      if (action === 'turn') { rotateTo(rot - Math.PI / 2); return; }
+      if (action === 'level') {
+        // いちばん近い「まっすぐ」（0°・90°・180°・270°）に戻す
+        rotateTo(Math.round(rot / (Math.PI / 2)) * (Math.PI / 2));
+        return;
+      }
       if (action === 'cancel') { finish(null); return; }
 
       // 画面で見えている範囲をそのまま正方形に描き出す
@@ -729,7 +846,10 @@ function cropImage(file) {
       ctx.fillStyle = '#2A251F'; // 余白が出たときの下地
       ctx.fillRect(0, 0, CROP_OUT, CROP_OUT);
       const r = CROP_OUT / S;
-      ctx.drawImage(img, tx * r, ty * r, nw * base * k * r, nh * base * k * r);
+      ctx.imageSmoothingQuality = 'high';
+      ctx.translate(cx * r, cy * r);
+      ctx.rotate(rot);
+      ctx.drawImage(view, (-W() / 2) * r, (-H() / 2) * r, W() * r, H() * r);
       const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.85));
       finish(blob);
     });
@@ -1223,7 +1343,7 @@ function recommendOne(records, shopMap) {
 // 当てはまるセリフをすべて集めてから、その中からランダムに1つ選ぶ。
 // 優先順位をつけていないので、同じ一杯でも開くたびに違う一言になる。
 function chikiTalk(records, subject, extra = []) {
-  if (!subject) return '一杯目、待ってる。';
+  if (!subject) return idleTalk(records, extra);
 
   // まずは点数に応じた3つ
   const pool = [...TIER_TALK[faceTier(subject.score)]];
@@ -1243,19 +1363,63 @@ function chikiTalk(records, subject, extra = []) {
   if (shopNth === 5) pool.push('常連だな。');
   if (shopNth === 10) pool.push('10回目。もう家だろ。');
 
-  const streak = streakDays(records, subject.date);
-  if (streak === 2) pool.push('2日連続か。');
-  if (streak === 3 || streak === 4) pool.push(`${streak}日続けて……ギルティ。`);
-  if (streak >= 5) pool.push('もう生活だな。');
+  // 連続記録と時間帯の話は、今日の一杯のときだけ（過去の日付で記録したものには言わない）
+  if (subject.date === todayStr()) {
+    const streak = streakDays(records, subject.date);
+    if (streak === 2) pool.push('2日連続か。');
+    if (streak === 3 || streak === 4) pool.push(`${streak}日続けて……ギルティ。`);
+    if (streak >= 5) pool.push('もう生活だな。');
 
-  const hour = new Date(subject.createdAt).getHours();
-  if (hour >= 5 && hour < 10) pool.push('朝から行ったのか。');
-  if (hour >= 22 || hour < 2) pool.push('こんな時間に……ギルティ。');
-  if (hour >= 2 && hour < 5) pool.push('もう朝じゃないか。');
+    const hour = new Date(subject.createdAt).getHours();
+    if (hour >= 5 && hour < 10) pool.push('朝から行ったのか。');
+    if (hour >= 22 || hour < 2) pool.push('こんな時間に……ギルティ。');
+    if (hour >= 2 && hour < 5) pool.push('もう朝じゃないか。');
+  }
 
   // おすすめの一杯があれば、他の一言と同じ扱いで混ぜる（毎回出るわけではない）
   pool.push(...extra);
 
+  return pick(pool);
+}
+
+// 今日まだ記録がないときの一言。過去の一杯の中身には触れず、
+// 時間帯・前回からの空き具合・ポイントなどから選ぶ。
+// extra（おすすめの一杯）は「そろそろどう？」という提案なので、ここに混ぜる
+function idleTalk(records, extra = []) {
+  if (!records.length) return '一杯目、待ってる。';
+
+  const pool = [
+    '腹へった。',
+    '今日はどこ行く？',
+    '麺、すすりたい。',
+    '次の一杯、決まった？',
+    'たまには新しい店もいいぞ。',
+    'スープの気分。',
+    'カロリーのことは忘れろ。',
+    '全部のせ、いっとく？',
+  ];
+
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 10) pool.push('朝ラーって手もある。');
+  if (hour >= 11 && hour < 14) pool.push('昼はラーメンだろ。', 'ランチ、決まった？');
+  if (hour >= 17 && hour < 22) pool.push('夜ラー、行くか。', '今日の晩飯は？');
+  if (hour >= 22 || hour < 2) pool.push('この時間のラーメンは罪の味。', '今から行く？……ギルティ。');
+  if (hour >= 2 && hour < 5) pool.push('寝ろ。');
+
+  // 前回からどれくらい空いたか（どの一杯だったかには触れない）
+  const last = records.reduce((a, r) => (r.date > a ? r.date : a), '');
+  const gap = Math.floor((new Date(`${todayStr()}T00:00:00`) - new Date(`${last}T00:00:00`)) / 86400000);
+  if (gap === 1) pool.push('今日も行く？');
+  if (gap >= 3 && gap < 7) pool.push('しばらく食べてないな。', `${gap}日空いてる。そろそろだろ。`);
+  if (gap >= 7) pool.push('一週間以上空いてる。禁断症状出てない？', 'まだ生きてるか？');
+
+  const monthCount = records.filter((r) => r.date.startsWith(todayStr().slice(0, 7))).length;
+  if (monthCount === 0 && new Date().getDate() >= 3) pool.push('今月まだ0杯。');
+
+  if (!fedToday()) pool.push('腹へった。餌くれ。');
+  if (chikiState.points >= GACHA_COST) pool.push('ポイント貯まってる。ガチャ回す？');
+
+  pool.push(...extra);
   return pick(pool);
 }
 
@@ -1282,18 +1446,23 @@ async function renderHome() {
   const newest = [...records].sort(byNewest);
   const recent = newest.slice(0, 5);
 
-  // 記録した直後はその一杯について話す。
-  // それ以外は最近の10杯から毎回選び直すので、開くたびに話題が変わる。
+  // ギルチキが話題にする一杯は「今日食べたもの」だけ。日付が変わったら、もう触れない
+  // （前は最近の10杯から選んでいたので、何日も前の一杯の話をしてしまっていた）。
+  // 記録した直後だけは、日付が今日でなくても、その一杯について話す。
+  const today = todayStr();
   const justSaved = lastSavedId ? records.find((r) => r.id === lastSavedId) : null;
   lastSavedId = null;
-  const subject = justSaved ?? (newest.length ? pick(newest.slice(0, 10)) : null);
+  const todays = newest.filter((r) => r.date === today);
+  const subject = justSaved ?? (todays.length ? pick(todays) : null);
   const rec = recommendOne(records, shopMap);
   const unread = await newsUnreadCount();
-  const talk = chikiTalk(records, subject, rec ? [rec.line] : []);
+  const talk = subject
+    ? chikiTalk(records, subject)
+    : idleTalk(records, rec ? [rec.line] : []);
   const showRecLink = Boolean(rec) && talk === rec.line;
   const talkSub = subject
     ? `${shopName(shopMap, subject.shopId)}・${subject.score}点`
-    : '記録するボタンから始められる';
+    : records.length ? '今日はまだ記録なし' : '記録するボタンから始められる';
 
   if (!alive()) return;
   app.innerHTML = `
@@ -3121,7 +3290,7 @@ async function deleteSharedPost(postId) {
     const path = (location.hash.slice(1) || '/').split('?')[0];
     if (path.startsWith('/post/')) location.hash = '#/feed';
     // 自動では更新されない一覧（自分の投稿・プロフィール）は描き直して消えたことを見せる
-    else if (path === '/myposts' || path.startsWith('/user/')) router();
+    else if (path === '/myposts' || path.startsWith('/posts/') || path.startsWith('/user/')) router();
   } catch (err) {
     console.error(err);
     toast(shareErrorMessage(err));
@@ -3533,14 +3702,16 @@ async function renderPost({ id, query }) {
       </button>
     </div>
 
-    <form class="comment-form" id="comment-form" hidden>
-      <textarea id="comment-text" rows="2" maxlength="200" placeholder="コメントを書く"></textarea>
-      <div class="comment-form-foot">
-        <span class="hint" id="reply-to"></span>
-        <button type="button" class="btn btn-ghost" id="comment-cancel">やめる</button>
-        <button type="submit" class="btn btn-primary" id="comment-send">送信</button>
-      </div>
-    </form>
+    <div id="comment-form-home">
+      <form class="comment-form" id="comment-form" hidden>
+        <span class="reply-to" id="reply-to" hidden></span>
+        <textarea id="comment-text" rows="2" maxlength="200" placeholder="コメントを書く"></textarea>
+        <div class="comment-form-foot">
+          <button type="button" class="btn btn-ghost" id="comment-cancel">やめる</button>
+          <button type="submit" class="btn btn-primary" id="comment-send">送信</button>
+        </div>
+      </form>
+    </div>
 
     <h2 class="section-title">コメント</h2>
     <ul class="comment-list" id="comment-list"><li class="empty">読み込んでいます…</li></ul>`;
@@ -3569,26 +3740,70 @@ async function renderPost({ id, query }) {
   const openBtn = $('#comment-open');
   const box = $('#comment-text');
   const replyLabel = $('#reply-to');
+  const formHome = $('#comment-form-home');
 
-  let replyTo = null; // 返信先のコメント（なければ通常のコメント）
+  // 返信のときは、入力欄を返信先のコメント（とその返信）のすぐ下に移す。
+  // 送った返信が出る場所と、書いている場所をそろえるため。
+  // コメント一覧は描き直されるたびに中身が入れ替わるので、入力欄はこの li に入れて
+  // 描き直しのあとに差し込み直す（入力中の文字はそのまま残る）。
+  const replySlot = document.createElement('li');
+  replySlot.className = 'comment-reply-slot';
+
+  // 返信先。{ threadId: 返信を並べる元のコメント, uid, nickname: 返信する相手 }。
+  // 通常のコメントなら null
+  let replyTo = null;
+
+  // 入力欄を今の状態に合った場所へ置く
+  function placeForm() {
+    if (replyTo) {
+      const rows = list.querySelectorAll(`[data-thread="${replyTo.threadId}"]`);
+      const last = rows[rows.length - 1];
+      if (last) {
+        if (replySlot.firstChild !== form) replySlot.appendChild(form);
+        last.after(replySlot);
+        return;
+      }
+      // 返信先のコメントが消えた。上の入力欄で、普通のコメントとして書けるようにする
+      setReplyTo(null);
+    }
+    replySlot.remove();
+    if (form.parentElement !== formHome) formHome.appendChild(form);
+  }
+
+  function setReplyTo(next) {
+    replyTo = next;
+    replyLabel.hidden = !next;
+    replyLabel.textContent = next ? `${next.nickname} さんへの返信` : '';
+    box.placeholder = next ? '返信を書く' : 'コメントを書く';
+  }
 
   function openForm() {
+    placeForm();
     form.hidden = false;
-    openBtn.setAttribute('aria-expanded', 'true');
+    openBtn.setAttribute('aria-expanded', String(!replyTo));
     form.classList.remove('is-opening');
     void form.offsetWidth;
     form.classList.add('is-opening'); // すっと開く動き
-    box.focus();
+    // キーボードを出すため、押した操作の中ですぐ入力欄を選ぶ（画面の位置はこのあと合わせる）
+    box.focus({ preventScroll: true });
+    form.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
+
   function closeForm() {
     form.hidden = true;
     openBtn.setAttribute('aria-expanded', 'false');
-    replyTo = null;
-    replyLabel.textContent = '';
+    setReplyTo(null);
     box.value = '';
+    placeForm(); // 上の定位置に戻す
   }
 
-  openBtn.onclick = () => (form.hidden ? openForm() : closeForm());
+  // 上の「コメントを書く」：普通のコメントを書く。返信を書いている途中なら、そちらはやめる
+  openBtn.onclick = () => {
+    if (!form.hidden && !replyTo) { closeForm(); return; }
+    if (replyTo) box.value = '';
+    setReplyTo(null);
+    openForm();
+  };
 
   // コメントアイコンから来たときは、最初から入力欄を開いておく
   if (query?.get('comment') === '1') openForm();
@@ -3633,8 +3848,14 @@ async function renderPost({ id, query }) {
   function drawComments(comments) {
     theseComments = comments;
     if (!document.body.contains(list)) return;
+    const typing = document.activeElement === box;
+    replySlot.remove(); // 描き直しで入力欄ごと消えないよう、先に外しておく
     list.innerHTML = comments.length ? commentTree(comments) : '<li class="empty">まだコメントはありません。</li>';
     restorePop(list);
+    if (replyTo) {
+      placeForm();
+      if (typing) box.focus({ preventScroll: true });
+    }
   }
 
   postStop.push(cloud.watchComments(
@@ -3651,10 +3872,18 @@ async function renderPost({ id, query }) {
 
   list.onclick = async (event) => {
     // 返信する
+    // 返信の返信も、元のコメントの下に並べる（段は1段のまま）。誰あての返信かは名前で残す
     const replyBtn = event.target.closest('[data-reply]');
     if (replyBtn) {
-      replyTo = { id: replyBtn.dataset.reply, nickname: replyBtn.dataset.replyName };
-      replyLabel.textContent = `${replyTo.nickname} さんへの返信`;
+      const next = {
+        threadId: replyBtn.dataset.reply,
+        uid: replyBtn.dataset.replyUid,
+        nickname: replyBtn.dataset.replyName,
+      };
+      // 別の相手への返信に切り替えたら、書きかけは捨てる（宛先と中身が食い違わないように）
+      const same = replyTo && replyTo.threadId === next.threadId && replyTo.uid === next.uid;
+      if (!same) box.value = '';
+      setReplyTo(next);
       openForm();
       return;
     }
@@ -3700,19 +3929,25 @@ async function renderPost({ id, query }) {
         nickname: myName(),
         avatar: me.profile?.avatar ?? null,
         text,
-        parentId: replyTo?.id ?? null,
+        parentId: replyTo?.threadId ?? null,
+        // 誰への返信か（通知の宛先と、返信の返信に「〇〇さんへ」と出すのに使う）
+        replyToUid: replyTo?.uid ?? null,
+        replyToName: replyTo?.nickname ?? null,
       });
       closeForm();
     } catch (err) {
       console.error(err);
-      toast(shareErrorMessage(err));
+      // 次に同じことが起きたときに原因を追えるよう、理由の記号も添える
+      const reason = err?.code || err?.name || '';
+      toast(`${shareErrorMessage(err)}${reason ? `（${reason}）` : ''}`);
     }
     sendBtn.disabled = false;
   };
 
 }
 
-// コメントを「元のコメント → その返信」の順に組み立てる（返信は1段まで）
+// コメントを「元のコメント → その返信」の順に組み立てる（段は1段まで）。
+// 返信の返信も、元のコメントの下に並べる
 function commentTree(comments) {
   const parents = comments.filter((c) => !c.parentId);
   const repliesOf = new Map();
@@ -3725,7 +3960,7 @@ function commentTree(comments) {
   const orphans = comments.filter((c) => c.parentId && !comments.some((x) => x.id === c.parentId));
 
   return [...parents, ...orphans]
-    .map((c) => commentRow(c) + (repliesOf.get(c.id) ?? []).map((r) => commentRow(r, true)).join(''))
+    .map((c) => commentRow(c) + (repliesOf.get(c.id) ?? []).map((r) => commentRow(r, c)).join(''))
     .join('');
 }
 
@@ -3739,20 +3974,27 @@ function commentGuiltyButton(c) {
   </button>`;
 }
 
-function commentRow(c, isReply = false) {
+// parent を渡すと「返信」として、元のコメントの下に1段下げて出す
+function commentRow(c, parent = null) {
   const mine = me.user && c.uid === me.user.uid;
+  const threadId = parent ? parent.id : c.id; // 返信はどれも、元のコメントの下に並ぶ
+  // 返信の返信（元のコメントを書いた人以外へ）のときだけ、誰あてかを添える
+  const toName = parent && c.replyToUid && c.replyToUid !== parent.uid
+    ? nameFor(c.replyToUid, c.replyToName)
+    : null;
   return `
-    <li class="comment${isReply ? ' is-reply' : ''}">
+    <li class="comment${parent ? ' is-reply' : ''}" data-thread="${threadId}">
       <a class="comment-user" href="#/user/${c.uid}">${avatarFor(c.uid, c.nickname, c.avatar)}</a>
       <div class="comment-body">
         <span class="comment-head">
           <a class="comment-who" href="#/user/${c.uid}">${esc(nameFor(c.uid, c.nickname))}</a>
           <span class="comment-when">${esc(whenText(c.createdAt))}</span>
         </span>
-        <p class="comment-text">${esc(c.text)}</p>
+        <p class="comment-text">${toName ? `<span class="comment-to">@${esc(toName)}</span> ` : ''}${esc(c.text)}</p>
         <div class="comment-actions">
           ${commentGuiltyButton(c)}
-          ${isReply ? '' : `<button type="button" class="mini-btn" data-reply="${c.id}" data-reply-name="${esc(c.nickname || '名無し')}">返信</button>`}
+          <button type="button" class="mini-btn" data-reply="${threadId}" data-reply-uid="${c.uid}"
+            data-reply-name="${esc(nameFor(c.uid, c.nickname))}">返信</button>
           ${mine ? `<button type="button" class="mini-btn is-quiet" data-del-comment="${c.id}">削除</button>` : ''}
         </div>
       </div>
@@ -3818,33 +4060,50 @@ function wirePostList(list, getPosts) {
   });
 }
 
-// 自分が共有した記録の一覧（#/myposts）
+// 共有した記録の一覧。自分の分（#/myposts）も、ほかの人の分（#/posts/uid）もここで出す。
+// 図鑑のカードから来たときは ?shop=店名 で、その店の投稿だけに絞る
 const MYPOSTS_SORTS = {
   new: { label: '新しい順', fn: (a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0) },
+  old: { label: '古い順', fn: (a, b) => (a.createdAt?.seconds ?? 0) - (b.createdAt?.seconds ?? 0) },
   score: { label: '点数順', fn: (a, b) => b.score - a.score || (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0) },
   guilty: { label: 'ギルティ順', fn: (a, b) => (b.guiltyUids?.length ?? 0) - (a.guiltyUids?.length ?? 0) || (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0) },
+  comment: { label: 'コメント順', fn: (a, b) => (b.commentCount ?? 0) - (a.commentCount ?? 0) || (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0) },
 };
 let myPostsSort = 'new'; // 並び順は、アプリを開いている間だけ覚えておく
 
-async function renderMyPosts() {
+function renderMyPosts() {
+  if (!me.user) return renderUserPosts({ id: null, query: new URLSearchParams() });
+  return renderUserPosts({ id: me.user.uid, query: new URLSearchParams() });
+}
+
+async function renderUserPosts({ id, query }) {
   const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
-  const title = '自分の投稿';
+  const isMe = Boolean(me.user) && (id == null || id === me.user.uid);
+  const shopFilter = query?.get('shop') ?? '';
+  const titleOf = (name) => (isMe ? '自分の投稿' : `${name ?? ''}の記録`);
   if (!me.ready) {
-    app.innerHTML = header(title) + '<p class="empty">確認しています…</p>';
+    app.innerHTML = header('共有した記録') + '<p class="empty">確認しています…</p>';
     return; // ログインの確認が終わったら描き直される
   }
   if (!me.user) {
-    app.innerHTML = header(title) + `
-      <p class="empty">ログインすると、自分が共有した記録をまとめて見られます。</p>
+    app.innerHTML = header('共有した記録') + `
+      <p class="empty">ログインすると、共有した記録をまとめて見られます。</p>
       <a class="btn btn-primary btn-block" href="#/account">ログイン</a>`;
     return;
   }
 
-  const backTo = { back: `#/user/${me.user.uid}`, backLabel: 'プロフィール' };
+  const uid = id ?? me.user.uid;
+  const backTo = { back: `#/user/${uid}`, backLabel: 'プロフィール' };
+  const name = isMe ? myName() : nameFor(uid, null);
 
   // 先に枠を出しておき、読めた時点で中身を入れる
-  app.innerHTML = header(title, backTo) + `
+  app.innerHTML = header(titleOf(name), backTo) + `
     <section class="myposts">
+      ${shopFilter ? `
+        <div class="posts-filter">
+          <span>「${esc(shopFilter)}」の記録だけ表示中</span>
+          <a href="#/posts/${uid}" class="posts-filter-clear">すべて見る</a>
+        </div>` : ''}
       <dl class="shop-stats" id="mp-stats"></dl>
       <div id="mp-sort"></div>
       <ul class="post-list" id="myposts-list"><li class="empty">読み込んでいます…</li></ul>
@@ -3856,23 +4115,31 @@ async function renderMyPosts() {
 
   const draw = () => {
     if (!alive() || !posts) return;
-    const guiltyTotal = posts.reduce((sum, p) => sum + (p.guiltyUids?.length ?? 0), 0);
-    const commentTotal = posts.reduce((sum, p) => sum + (p.commentCount ?? 0), 0);
-    $('#mp-stats').innerHTML = `
-      <div><dt>共有</dt><dd>${posts.length}<small>杯</small></dd></div>
-      <div><dt>ギルティ</dt><dd>${guiltyTotal}<small>回</small></dd></div>
-      <div><dt>コメント</dt><dd>${commentTotal}<small>件</small></dd></div>`;
+    const target = shopFilter ? posts.filter((p) => p.shopName === shopFilter) : posts;
+    const guiltyTotal = target.reduce((sum, p) => sum + (p.guiltyUids?.length ?? 0), 0);
+    const commentTotal = target.reduce((sum, p) => sum + (p.commentCount ?? 0), 0);
+    $('#mp-stats').innerHTML = shopFilter
+      ? `
+        <div><dt>回数</dt><dd>${target.length}<small>回</small></dd></div>
+        <div><dt>最高</dt><dd>${target.length ? Math.max(...target.map((p) => p.score)) : '–'}<small>点</small></dd></div>
+        <div><dt>平均</dt><dd>${target.length ? Math.round(target.reduce((sum, p) => sum + p.score, 0) / target.length) : '–'}<small>点</small></dd></div>`
+      : `
+        <div><dt>共有</dt><dd>${target.length}<small>杯</small></dd></div>
+        <div><dt>ギルティ</dt><dd>${guiltyTotal}<small>回</small></dd></div>
+        <div><dt>コメント</dt><dd>${commentTotal}<small>件</small></dd></div>`;
 
-    $('#mp-sort').innerHTML = posts.length > 1 ? `
-      <div class="feed-tabs myposts-sort" role="tablist">
+    $('#mp-sort').innerHTML = target.length > 1 ? `
+      <div class="sort-chips" role="tablist" aria-label="並び順">
         ${Object.entries(MYPOSTS_SORTS).map(([key, { label }]) => `
-          <button type="button" class="feed-tab${key === myPostsSort ? ' is-on' : ''}" data-sort="${key}" role="tab" aria-selected="${key === myPostsSort}">${label}</button>`).join('')}
+          <button type="button" class="sort-chip${key === myPostsSort ? ' is-on' : ''}" data-sort="${key}" role="tab" aria-selected="${key === myPostsSort}">${label}</button>`).join('')}
       </div>` : '';
 
-    shown = [...posts].sort(MYPOSTS_SORTS[myPostsSort].fn);
+    shown = [...target].sort(MYPOSTS_SORTS[myPostsSort].fn);
     list.innerHTML = shown.length
       ? shown.map((p) => postCard(p)).join('')
-      : '<li class="empty">まだ共有した記録がありません。記録の画面で「みんなに共有」を選ぶと、ここに並びます。</li>';
+      : isMe
+        ? '<li class="empty">まだ共有した記録がありません。記録の画面で「みんなに共有」を選ぶと、ここに並びます。</li>'
+        : '<li class="empty">まだ共有した記録がありません。</li>';
     restorePop(list);
   };
 
@@ -3886,9 +4153,18 @@ async function renderMyPosts() {
     draw();
   });
 
+  // 名前が分かったら見出しを直す（みんなの記録を通らずに来たときなど）
+  if (!isMe && !profileCache.get(uid)?.nickname) {
+    ensureProfiles([uid]).then(() => {
+      if (!alive()) return;
+      const t = app.querySelector('.bar-title');
+      if (t) t.textContent = titleOf(nameFor(uid, null));
+    });
+  }
+
   try {
     // 端末に残っているぶんがあれば、通信を待たずに先に出す
-    const fresh = await cloud.getPostsByUser(me.user.uid, (cached) => {
+    const fresh = await cloud.getPostsByUser(uid, (cached) => {
       posts = cached;
       draw();
     });
@@ -3896,7 +4172,7 @@ async function renderMyPosts() {
     posts = fresh;
     draw();
     // サーバーの投稿と、端末の「共有済み」の印を突き合わせて直す
-    reconcileSharedLinks(fresh).catch((err) => console.error(err));
+    if (isMe) reconcileSharedLinks(fresh).catch((err) => console.error(err));
   } catch (err) {
     console.error(err);
     if (!alive() || posts) return; // すでにキャッシュぶんを出せていれば、そのままにする
@@ -4206,13 +4482,18 @@ async function renderUser({ id }) {
     const showZukan = profile?.showZukan !== false;
     const showCalendar = profile?.showCalendar !== false;
     $('#u-body').innerHTML = `
+      ${!isMe && posts.length ? `
+        <a class="user-posts-link" href="#/posts/${id}">
+          <span>共有した記録を一覧で見る</span>
+          <small>${posts.length}杯・並び替えできます ›</small>
+        </a>` : ''}
       ${showZukan ? '<h2 class="section-title">図鑑</h2><div id="user-zukan"></div>' : ''}
       ${showCalendar ? '<h2 class="section-title">カレンダー</h2><div id="user-cal"></div>' : ''}
       ${!showZukan && !showCalendar
         ? '<p class="empty">このユーザーは図鑑とカレンダーを公開していません。</p>'
         : ''}
       <div id="u-tagged"></div>`;
-    if (showZukan) renderUserZukan($('#user-zukan'), posts);
+    if (showZukan) renderUserZukan($('#user-zukan'), posts, id);
     if (showCalendar) renderUserCalendar($('#user-cal'), posts);
     drawHead();   // バッジを付け直す
     drawTagged(); // 入れ物を作り直したので、読めていれば書き戻す
@@ -4286,25 +4567,31 @@ async function renderUser({ id }) {
   }
 }
 
-// 共有された記録をお店ごとにまとめて図鑑にする
-function renderUserZukan(slot, posts) {
+// 共有された記録をお店ごとにまとめて図鑑にする。
+// カードをタップすると、その店の投稿へ（1回だけならその投稿、何回もあれば一覧）
+function renderUserZukan(slot, posts, uid) {
   if (!posts.length) {
     slot.innerHTML = '<p class="empty">共有された記録がありません。</p>';
     return;
   }
   const byShop = new Map();
   // 古い順に見て、最初の1件を「初めて食べた時」として扱う
-  const oldest = [...posts].reverse();
+  const oldest = [...posts].sort((a, b) => (a.createdAt?.seconds ?? 0) - (b.createdAt?.seconds ?? 0));
   for (const p of oldest) {
-    if (!byShop.has(p.shopName)) byShop.set(p.shopName, { first: p, count: 0 });
-    byShop.get(p.shopName).count += 1;
+    if (!byShop.has(p.shopName)) byShop.set(p.shopName, { first: p, count: 0, best: 0 });
+    const v = byShop.get(p.shopName);
+    v.count += 1;
+    v.best = Math.max(v.best, p.score);
   }
 
   slot.innerHTML = `<ul class="zukan">${[...byShop.entries()].map(([shopNameText, v], i) => {
     const comment = (v.first.comment ?? '').trim();
+    const href = v.count === 1
+      ? `#/post/${v.first.id}`
+      : `#/posts/${uid}?shop=${encodeURIComponent(shopNameText)}`;
     return `
       <li>
-        <div class="zk-card">
+        <a class="zk-card is-link" href="${href}">
           <div class="zk-photo">
             ${v.first.photo ? `<img src="${v.first.photo}" alt="" loading="lazy">` : noImage}
             <span class="zk-stamp">${v.count}<small>回</small></span>
@@ -4312,9 +4599,10 @@ function renderUserZukan(slot, posts) {
           <div class="zk-body">
             <span class="zk-no">No.${String(i + 1).padStart(3, '0')}</span>
             <h3 class="zk-name">${esc(shopNameText)}</h3>
+            <p class="zk-best${v.best >= GUILTY ? ' is-guilty' : ''}">最高 <b>${v.best}</b>点</p>
             <p class="zk-comment${comment ? '' : ' is-empty'}">${comment ? esc(comment) : 'コメントがありません'}</p>
           </div>
-        </div>
+        </a>
       </li>`;
   }).join('')}</ul>`;
 }
@@ -4415,6 +4703,21 @@ function downloadFile(file) {
 //   items   … 変更点。「見出し：説明」と書くと、見出しが太字になる
 const CHANGELOG = [
   {
+    version: 'ramen-log-v47',
+    date: '2026-10-08',
+    title: '返信の改善と、ほかの人の記録一覧',
+    lead: 'コメントの返信まわりを直し、ほかの人の共有した記録を見やすくしました。',
+    items: [
+      '返信：返信を送ったのに「うまくいきませんでした」と出ていたのを直しました。送ったあとは入力欄も空に戻ります',
+      '返信の入力欄：返信先のコメントのすぐ下に開くようになりました。送った返信が並ぶ場所と同じです',
+      '返信の返信：返信にも返信できるようになりました。誰あてかは「@名前」で分かります。相手には通知も届きます',
+      '共有した記録の一覧：ほかの人のプロフィールから、その人が共有した記録を一覧で見られます。新しい順・古い順・点数順・ギルティ順・コメント順で並び替えできます',
+      '図鑑：ほかの人の図鑑に最高点が出るようになり、タップするとその店の投稿を見られます',
+      '写真の向き：写真を選んだとき、2本指でひねると自由な角度に回せるようになりました。拡大と同時にできます。90度ずつ回すボタンと、まっすぐに戻すボタンもあります',
+      'ギルチキの一言：食べた一杯や連続記録の話は、その日のうちだけになりました。記録がない日は別の話をします',
+    ],
+  },
+  {
     version: 'ramen-log-v46',
     date: '2026-10-02',
     title: 'ユーザー検索とポイント履歴を追加',
@@ -4456,7 +4759,7 @@ async function markNewsRead() {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v46';
+const APP_VERSION = 'ramen-log-v47';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -5434,6 +5737,7 @@ const routes = [
   { path: /^\/search$/, view: renderSearch },
   { path: /^\/points$/, view: renderPoints },
   { path: /^\/myposts$/, view: renderMyPosts },
+  { path: /^\/posts\/([\w@.-]+)$/, view: renderUserPosts },
   { path: /^\/about-chiki$/, view: renderAboutChiki },
 ];
 

@@ -241,35 +241,26 @@ export function watchComments(postId, callback, onError) {
   }, onError);
 }
 
+// コメントを書く。書くのはコメント1件だけ。
+// 投稿側の「コメント数」と「最新のコメント」は、Cloud Functions（syncCommentStats）が
+// コメントの増減を見て数え直して書き込む。
+// 以前はここで投稿側も書き換えていたが、コメント自体は送れているのに
+// 2つ目の書き込みだけが失敗して「うまくいきませんでした」と出ることがあったため、
+// 書き込みを1回にまとめた（数え直し方式なので、件数がずれても次のコメントで直る）。
 export async function addComment(postId, comment) {
   const { db, f } = await store();
-  await f.addDoc(f.collection(db, 'posts', postId, 'comments'), {
+  const ref = await f.addDoc(f.collection(db, 'posts', postId, 'comments'), {
     ...comment,
     guiltyUids: [],
     createdAt: f.serverTimestamp(),
   });
-  // 一覧に件数と最新のコメントを出すため、投稿側にも書いておく。
-  // 一覧を開くたびにコメントを読みに行かなくて済む。
-  await f.updateDoc(f.doc(db, 'posts', postId), {
-    commentCount: f.increment(1),
-    lastComment: { uid: comment.uid, nickname: comment.nickname, avatar: comment.avatar ?? null, text: comment.text },
-  });
+  return ref.id;
 }
 
+// コメントを消す。投稿側の件数は addComment と同じく Cloud Functions が直す
 export async function deleteComment(postId, commentId) {
   const { db, f } = await store();
   await f.deleteDoc(f.doc(db, 'posts', postId, 'comments', commentId));
-  // 消したのが最新の1件だったときのために、残っている中の最新を入れ直す
-  const rest = await f.getDocs(f.query(
-    f.collection(db, 'posts', postId, 'comments'),
-    f.orderBy('createdAt', 'desc'),
-    f.limit(1),
-  ));
-  const newest = rest.docs[0]?.data();
-  await f.updateDoc(f.doc(db, 'posts', postId), {
-    commentCount: f.increment(-1),
-    lastComment: newest ? { uid: newest.uid, nickname: newest.nickname, avatar: newest.avatar ?? null, text: newest.text } : null,
-  });
 }
 
 // コメントにもギルティを付けられるようにする
