@@ -634,10 +634,12 @@ function cropImage(file) {
               <path d="M7.8 3.2v4.6H3.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
-          <span class="crop-angle" aria-live="polite">0°</span>
+          <div class="crop-dial" role="slider" aria-label="角度の微調整" aria-valuenow="0">
+            <span class="crop-angle" aria-live="polite">0°</span>
+          </div>
           <button type="button" class="crop-reset" data-crop="level" disabled>傾きを戻す</button>
         </div>
-        <p class="crop-hint">1本指で動かす。2本指でつまむと拡大、大きくひねると回転。<br>左のボタンで90度ずつ回せます。</p>
+        <p class="crop-hint">1本指で動かす。2本指でつまむと拡大、ひねると回転。<br>細かい角度は、目盛りを左右になぞって合わせられます。</p>
       </div>`;
     document.body.appendChild(host);
 
@@ -645,6 +647,7 @@ function cropImage(file) {
     const view = host.querySelector('.crop-img'); // 写真を描いたキャンバス。CSSで動かす・回す
     const zoom = host.querySelector('.crop-zoom');
     const angleEl = host.querySelector('.crop-angle');
+    const dial = host.querySelector('.crop-dial');
     const levelBtn = host.querySelector('[data-crop="level"]');
 
     const S = stage.clientWidth; // 枠の一辺（画面上の大きさ）
@@ -669,6 +672,9 @@ function cropImage(file) {
     let rot = 0;    // 回転（ラジアン、右回りが正）
     let cx = F;     // 写真の中心が枠のどこにあるか
     let cy = F;
+
+    // 目盛り（細かい角度合わせ）の1°あたりの幅。なぞった距離 ÷ これ が回る角度
+    const DIAL_PX = 12;
 
     const W = () => nw * base * k; // 画面上の写真の幅・高さ（回す前）
     const H = () => nh * base * k;
@@ -717,6 +723,9 @@ function cropImage(file) {
       zoom.value = k;
       const d = angleDeg();
       angleEl.textContent = `${d > 0 ? '+' : ''}${d}°`;
+      // 目盛りを今の角度の位置までずらす（1°＝DIAL_PX ピクセル）
+      dial.style.backgroundPositionX = `${dial.clientWidth / 2 - ((rot * 180) / Math.PI) * DIAL_PX}px`;
+      dial.setAttribute('aria-valuenow', String(d));
       levelBtn.disabled = Math.abs(d % 90) < 0.05;
     }
 
@@ -758,13 +767,16 @@ function cropImage(file) {
     let gesture = null; // 2本指の前回の状態 { dist, angle, mx, my }
 
     // 拡大したいだけなのに回ってしまわないよう、2本指を置いてからの動きで
-    // 「回す操作」か「拡大する操作」かを見分ける（地図アプリと同じ考え方）。
-    //   ひねりの合計が ROT_START を超えたら → 回転を始める（そこから先は指どおりに回る）
-    //   先に拡大・縮小が ZOOM_LOCK を超えたら → その操作の間は回転しない
-    // 指を離して置き直すたびに、見分け直す
-    const ROT_START = (12 * Math.PI) / 180; // 12°
-    const ZOOM_LOCK = Math.log(1.15);       // 15%の拡大・縮小
-    let session = null; // { twist, zoomLog, rotating, zoomOnly }
+    // 「回す操作」か「拡大する操作」かを見分ける。
+    // 指先が「円をなぞる向き」と「離れる・近づく向き」のどちらに多く動いたかで決める。
+    //   ひねりが ROT_START 以上で、円の向きの動きが多い → 回転を始める（そこから先は指どおり）
+    //   先に離れる・近づく動きが ZOOM_LOCK_PX を超えた → その操作の間は回転しない
+    // 指を離して置き直すたびに、見分け直す。
+    // （以前は12°ひねるまで回らなかったので、少しだけ傾けるのが難しかった）
+    const ROT_START = (4 * Math.PI) / 180; // 4°
+    const ZOOM_LOCK_PX = 28;               // 指1本あたり28px 離れる・近づく
+    let session = null; // { twist, radial, startDist, rotating, zoomOnly }
+
 
     function twoFingerState() {
       const [a, b] = [...points.values()];
@@ -782,7 +794,9 @@ function cropImage(file) {
       points.set(e.pointerId, { x: e.clientX, y: e.clientY });
       gesture = points.size >= 2 ? twoFingerState() : null;
       // 2本目の指が置かれたところから、新しい操作として見分け始める
-      if (points.size === 2) session = { twist: 0, zoomLog: 0, rotating: false, zoomOnly: false };
+      if (points.size === 2) {
+        session = { twist: 0, radial: 0, startDist: gesture.dist, rotating: false, zoomOnly: false };
+      }
     });
 
     stage.addEventListener('pointermove', (e) => {
@@ -804,10 +818,16 @@ function cropImage(file) {
         // 回す操作かどうかを見分ける。回転が始まるまでは、ひねっても角度は変えない
         if (session && !session.rotating && !session.zoomOnly) {
           session.twist += dRot;
-          session.zoomLog += Math.log(pinch);
-          if (Math.abs(session.twist) >= ROT_START) session.rotating = true; // 次の動きから回す
-          else if (Math.abs(session.zoomLog) >= ZOOM_LOCK) session.zoomOnly = true;
-          dRot = 0;
+          const radial = Math.abs(now.dist - session.startDist) / 2;    // 指1本ぶんの離れ・近づき
+          const arc = Math.abs(session.twist) * (now.dist / 2);         // 指1本ぶんの円の動き
+          if (Math.abs(session.twist) >= ROT_START && arc > radial * 1.2) {
+            session.rotating = true;
+            // 見分けるまでにひねったぶんも足して、指の向きと写真の向きをそろえる
+            dRot = session.twist;
+          } else {
+            if (radial >= ZOOM_LOCK_PX && radial > arc) session.zoomOnly = true;
+            dRot = 0;
+          }
         } else if (!session?.rotating) {
           dRot = 0;
         }
@@ -841,6 +861,23 @@ function cropImage(file) {
     stage.addEventListener('pointercancel', release);
 
     zoom.addEventListener('input', () => zoomTo(Number(zoom.value)));
+
+    // 目盛りを左右になぞって、細かく角度を合わせる（目盛りが指についてくる）
+    let dialX = null;
+    dial.addEventListener('pointerdown', (e) => {
+      dial.setPointerCapture(e.pointerId);
+      dialX = e.clientX;
+    });
+    dial.addEventListener('pointermove', (e) => {
+      if (dialX == null) return;
+      e.preventDefault();
+      const dx = e.clientX - dialX;
+      dialX = e.clientX;
+      rotateTo(rot - ((dx / DIAL_PX) * Math.PI) / 180);
+    });
+    const dialEnd = () => { dialX = null; };
+    dial.addEventListener('pointerup', dialEnd);
+    dial.addEventListener('pointercancel', dialEnd);
 
     // --- ボタン ---
     function finish(blob) {

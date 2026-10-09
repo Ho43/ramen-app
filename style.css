@@ -3561,12 +3561,55 @@ body.gate-open { overflow: hidden; }
 .crop-turn:active { transform: scale(0.94); background: var(--surface-2); }
 
 /* 今の角度 */
-.crop-angle {
+/* 角度の目盛り。左右になぞって細かく合わせる。
+   1°ごとに細い線、5°ごとに太い線。間隔は app.js の DIAL_PX（12px）とそろえる */
+.crop-dial {
+  position: relative;
   flex: 1;
+  min-width: 0;
+  height: 50px;
+  overflow: hidden;
+  border-radius: 10px;
+  background-color: var(--surface);
+  background-image:
+    repeating-linear-gradient(90deg, var(--cream) 0 2px, transparent 2px 60px),
+    repeating-linear-gradient(90deg, var(--muted) 0 1px, transparent 1px 12px);
+  background-size: 100% 14px, 100% 8px;
+  background-repeat: repeat-x;
+  background-position-y: bottom 6px, bottom 6px;
+  touch-action: none;
+  cursor: ew-resize;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+}
+
+/* 真ん中の印（今の角度の位置） */
+.crop-dial::after {
+  content: "";
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  width: 2px;
+  height: 20px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--yolk);
+}
+
+.crop-angle {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  z-index: 1;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--surface);
+  transform: translateX(-50%);
   color: var(--cream);
-  font-size: 15px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   text-align: center;
+  pointer-events: none;
 }
 
 /* 傾きをまっすぐに戻す */
