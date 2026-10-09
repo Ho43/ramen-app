@@ -13,8 +13,8 @@
 
 ---
 
-| ホーム | 図鑑 | 記録する |
-|:---:|:---:|:---:|
+|                               ホーム                               |                               図鑑                                |                              記録する                              |
+| :----------------------------------------------------------------: | :---------------------------------------------------------------: | :----------------------------------------------------------------: |
 | <img src="docs/screenshots/home.png" width="240" alt="ホーム画面"> | <img src="docs/screenshots/zukan.png" width="240" alt="図鑑画面"> | <img src="docs/screenshots/record.png" width="240" alt="記録画面"> |
 
 ## 概要
@@ -59,32 +59,23 @@
 
 ## 技術構成
 
-| 分類 | 使った技術 |
-|---|---|
-| アプリ本体 | HTML / CSS / JavaScript、PWA |
-| 自分の記録の保存 | IndexedDB（端末の中） |
-| ログイン・共有 | Firebase Authentication、Cloud Firestore |
-| 通知 | Cloud Functions for Firebase、Firebase Cloud Messaging |
-| お店の検索 | Google Places API |
-| 公開 | GitHub Pages |
+| 分類             | 使った技術                                             |
+| ---------------- | ------------------------------------------------------ |
+| アプリ本体       | HTML / CSS / JavaScript、PWA                           |
+| 自分の記録の保存 | IndexedDB（端末の中）                                  |
+| ログイン・共有   | Firebase Authentication、Cloud Firestore               |
+| 通知             | Cloud Functions for Firebase、Firebase Cloud Messaging |
+| お店の検索       | Google Places API                                      |
+| 公開             | GitHub Pages                                           |
 
 <details>
-<summary><b>構成図とFirebaseを選んだ理由</b></summary>
+<summary><b>データの流れとFirebaseを選んだ理由</b></summary>
 
-記録はまず端末の中に保存し、共有を選んだ記録だけをFirebaseに送る作りです。
+**データの流れ**
 
-```mermaid
-flowchart LR
-  iPhone["iPhone<br>ホーム画面のアプリ"] --> App["PWA<br>HTML / CSS / JS"]
-  GH["GitHub Pages"] -. 配信 .-> App
-  App <--> IDB[("IndexedDB<br>自分の記録")]
-  App <--> FS[("Cloud Firestore<br>共有した記録")]
-  App --> Auth["Firebase Authentication"]
-  App --> Places["Google Places API"]
-  FS -- 書き込みを検知 --> CF["Cloud Functions"]
-  CF --> FCM["Firebase Cloud Messaging"]
-  FCM -- プッシュ通知 --> iPhone
-```
+1. 記録すると、まずスマホの中に保存される
+2. 共有を選ぶと、その記録だけがFirebaseのデータベースに保存される
+3. 保存されたことをきっかけに、サーバー側のプログラム（Cloud Functions）が自動で動き、ほかのメンバーのiPhoneに通知を送る
 
 **Firebaseを選んだ理由**
 GitHub Pagesはファイルを公開するだけの仕組みなので、友人と記録を共有するには、別にデータを保存できる場所が必要でした。
@@ -101,12 +92,10 @@ GitHub Pagesはファイルを公開するだけの仕組みなので、友人�
 
 - **WindowsだけでiPhoneアプリを届ける**
   開発に使えるのがWindowsのパソコンだけで、App Storeでの配布は難しい環境でした。そこで、Safariからホーム画面に追加して使えるWebアプリ（PWA）にし、GitHub Pagesで無料公開する形を選びました。
-- **「丼の中」のデザイン**
-  画面全体を黒い背景にして、丼をのぞき込んだような見た目にしました。
 - **「ギルティ！」の基準**
-  最初は90点以上で「ギルティ！」が出る設定でしたが、ギルティ演出にもっと特別感を持たせたかったので、95点以上に上げました。「ギルティ」は「罪なほどおいしい」という意味でよく使われる言葉から取りました。
+  最初は90点以上で「ギルティ！」が出る設定でしたが、ギルティ演出にもっと特別感を持たせたかったので、95点以上に上げました。
 - **ギルチキの口調**
-  下手に出すぎない、短めのタメ口にしました。最初の案にあった「〜っす」口調はしっくりこなかったので、やめました。
+  下手に出すぎない、短めのタメ口にしました。
 - **新機能と調整を分ける**
   機能を足し続けるのではなく、いったん区切って使い勝手の調整やバグ修正をしてから正式リリースしました。今も「新機能」と「調整」を分けて更新しています。
 
@@ -184,18 +173,18 @@ AIが作ったものが思った通りに動かないことは、何度もあり
 <details>
 <summary><b>ファイル構成</b></summary>
 
-| ファイル | 役割 |
-|---|---|
-| `index.html` | アプリの入り口 |
-| `app.js` | 画面の表示と操作 |
-| `style.css` | 見た目 |
-| `db.js` | 端末内の保存（IndexedDB） |
-| `cloud.js` | Firebase（ログイン・共有・通知）とのやり取り |
-| `firebase-config.js` | Firebaseへの接続情報 |
-| `sw.js` | オフライン対応と通知の受け取り（Service Worker） |
-| `manifest.json` | ホーム画面に追加したときの名前とアイコン |
-| `firestore.rules` | Firestoreのセキュリティルール |
-| `icons/`、`*.png` | アイコン、ギルチキ、アバター、バッジの画像 |
+| ファイル              | 役割                                                      |
+| --------------------- | --------------------------------------------------------- |
+| `index.html`          | アプリの入り口                                            |
+| `app.js`              | 画面の表示と操作                                          |
+| `style.css`           | 見た目                                                    |
+| `db.js`               | 端末内の保存（IndexedDB）                                 |
+| `cloud.js`            | Firebase（ログイン・共有・通知）とのやり取り              |
+| `firebase-config.js`  | Firebaseへの接続情報                                      |
+| `sw.js`               | オフライン対応と通知の受け取り（Service Worker）          |
+| `manifest.json`       | ホーム画面に追加したときの名前とアイコン                  |
+| `firestore.rules`     | Firestoreのセキュリティルール                             |
+| `icons/`、`*.png`     | アイコン、ギルチキ、アバター、バッジの画像                |
 | `docs/DEVELOPMENT.md` | 実装の決めごとや運用手順の[開発メモ](docs/DEVELOPMENT.md) |
 
 </details>
