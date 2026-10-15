@@ -426,22 +426,53 @@ function askPersist() {
 // ここで1か所に覚えておいて、変化があったら画面を描き直す。
 let me = { user: null, profile: null, ready: false };
 
+// ログイン状態で見た目が変わる画面だけ描き直す
+function rerenderForLogin() {
+  const path = (location.hash.slice(1) || '/').split('?')[0];
+  if (path === '/' || path === '/feed' || path === '/myposts' || path === '/search' || path === '/badges'
+    || path.startsWith('/post/') || path.startsWith('/posts/') || path.startsWith('/user/') || path.startsWith('/follows/')) router();
+}
+
 cloud.watchAuth(async (user) => {
   me.user = user;
   me.profile = null;
+  // 端末に残っているプロフィールがあれば、通信を待たずにそれで先に画面を出す。
+  // （以前は毎回サーバーからプロフィールを読み終わるまで「確認しています…」のままで、
+  //   通知から開いたときなどに表示が遅く感じる原因になっていた）
+  let shownFromCache = false;
   if (user) {
     try {
-      me.profile = await cloud.getProfile(user.uid);
+      const fresh = await cloud.getProfile(user.uid, (cached) => {
+        if (!cached || me.user !== user) return;
+        me.profile = cached;
+        me.ready = true;
+        profileCache.set(user.uid, cached);
+        shownFromCache = true;
+        rerenderForLogin();
+      });
+      if (me.user !== user) return; // 待っている間にログアウトした
+      const changed = JSON.stringify(fresh) !== JSON.stringify(me.profile);
+      me.profile = fresh;
+      me.ready = true;
+      profileCache.set(user.uid, fresh);
+      // 先に出した画面と中身が同じなら、描き直さない（ちらつき防止）
+      if (shownFromCache && !changed) return;
     } catch (err) {
       console.error(err);
+      if (shownFromCache) return; // 端末のぶんで表示できているので、そのまま使う
     }
   }
   me.ready = true;
   if (user) profileCache.set(user.uid, me.profile);
-  // ログイン状態で見た目が変わる画面だけ描き直す
-  const path = (location.hash.slice(1) || '/').split('?')[0];
-  if (path === '/' || path === '/feed' || path === '/myposts' || path === '/search'
-    || path.startsWith('/post/') || path.startsWith('/posts/') || path.startsWith('/user/') || path.startsWith('/follows/')) router();
+  rerenderForLogin();
+});
+
+// 通知をタップしたとき、開いているアプリに Service Worker から「この画面へ」と届く。
+// ページを読み込み直さずに画面だけ切り替えるので、すぐに開ける
+navigator.serviceWorker?.addEventListener('message', (event) => {
+  const data = event.data ?? {};
+  if (data.type !== 'open' || typeof data.hash !== 'string' || !data.hash.startsWith('#/')) return;
+  if (location.hash !== data.hash) location.hash = data.hash;
 });
 
 const myName = () => me.profile?.nickname ?? me.user?.email?.split('@')[0] ?? '名無し';
@@ -921,6 +952,16 @@ function cropImage(file) {
 
 /* ===================== 共通パーツ ===================== */
 
+// 読み込み中の表示。ギルチキがゆっくりくるくる回る。
+// すぐ読み終わるときにチラッと見えないよう、少し待ってからふわっと出す（CSS側）
+function loadingView(text = '読み込み中…', small = false) {
+  return `<div class="loading${small ? ' is-small' : ''}" role="status" aria-live="polite">
+    <img class="loading-chiki" src="./giruchiki.png" alt="" draggable="false">
+    ${text ? `<span class="loading-text">${esc(text)}</span>` : ''}
+  </div>`;
+}
+
+
 // 画面上部のバー。back に 'history' を渡すと「ひとつ前の画面へ戻る」ボタンになる
 // 左上の「戻る」ボタンが指している行き先。
 // スワイプで戻るときも同じ場所を使うので、表記と実際の移動先が必ず一致する。
@@ -1050,15 +1091,15 @@ const costumeById = (id) => COSTUMES.find((c) => c.id === id) ?? null;
 const BADGE_STEP = 5;   // 何杯ごとに1段階上がるか
 
 const BADGES = [
-  { name: '箸 一',     file: null },
-  { name: '箸 二',     file: null },
-  { name: '箸 三',     file: null },
+  { name: '箸 一', file: './badge-hashi1.png' },
+  { name: '箸 二', file: './badge-hashi2.png' },
+  { name: '箸 三', file: './badge-hashi3.png' },
   { name: 'れんげ 一', file: './badge-renge1.png' },
   { name: 'れんげ 二', file: './badge-renge2.png' },
   { name: 'れんげ 三', file: './badge-renge3.png' },
-  { name: '丼 一',     file: null },
-  { name: '丼 二',     file: null },
-  { name: '丼 三',     file: null },
+  { name: '丼 一', file: './badge-don1.png' },
+  { name: '丼 二', file: './badge-don2.png' },
+  { name: '丼 三', file: './badge-don3.png' },
 ];
 
 const BADGE_MAX = BADGES.length;
@@ -1785,13 +1826,17 @@ function costumeThumb(costume, { locked = false, equipped = false } = {}) {
 
 async function renderBadges() {
   const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
+  if (!me.ready) {
+    app.innerHTML = header('バッジ') + loadingView();
+    return; // ログインの確認が終わったら描き直される
+  }
   if (!me.user) {
     goReplace('#/settings');
     return;
   }
 
   app.innerHTML = header('バッジ', { back: '#/account', backLabel: 'アカウント' })
-    + '<p class="empty">読み込んでいます…</p>';
+    + loadingView();
 
   let count = 0;
   try {
@@ -2245,7 +2290,7 @@ async function renderNearby() {
   btn.onclick = async () => {
     btn.disabled = true;
     btn.textContent = '探しています…';
-    result.innerHTML = '';
+    result.innerHTML = loadingView('近くの店を探しています…');
     try {
       const coords = await currentPosition();
       const places = await searchNearbyRamen(coords);
@@ -3436,7 +3481,7 @@ async function renderFeed() {
   stopFeed();
 
   if (!me.ready) {
-    app.innerHTML = header('みんなの記録') + '<p class="empty">確認しています…</p>';
+    app.innerHTML = header('みんなの記録') + loadingView();
     return;
   }
   if (!me.user) {
@@ -3458,7 +3503,7 @@ async function renderFeed() {
       <button type="button" class="feed-tab${feedTab === 'all' ? ' is-on' : ''}" data-feedtab="all" role="tab" aria-selected="${feedTab === 'all'}">みんな</button>
       <button type="button" class="feed-tab${feedTab === 'following' ? ' is-on' : ''}" data-feedtab="following" role="tab" aria-selected="${feedTab === 'following'}">フォロー中</button>
     </div>` : '')
-    + '<ul class="post-list" id="feed"><li class="empty">読み込んでいます…</li></ul>';
+    + `<ul class="post-list" id="feed"><li class="loading-li">${loadingView()}</li></ul>`;
   const list = $('#feed');
 
   let latestPosts = [];
@@ -3546,7 +3591,7 @@ async function showGuiltyList(uids) {
   host.className = 'sheet';
   host.innerHTML = `<div class="sheet-box">
     <h2 class="sheet-title">ギルティした人</h2>
-    <ul class="sheet-list"><li class="empty">読み込んでいます…</li></ul>
+    <ul class="sheet-list"><li class="loading-li">${loadingView('', true)}</li></ul>
     <button type="button" class="btn btn-ghost btn-block" data-close>閉じる</button>
   </div>`;
   document.body.appendChild(host);
@@ -3600,9 +3645,9 @@ function setupLongPress(root, selector, onLong) {
 }
 
 // 写真を画面いっぱいに開く。2本指でつまむと拡大、ドラッグで動かせる。
-function openPhoto(src) {
+function openPhoto(src, { round = false } = {}) {
   const host = document.createElement('div');
-  host.className = 'viewer';
+  host.className = round ? 'viewer is-round' : 'viewer';
   host.innerHTML = `
     <button type="button" class="viewer-close" data-close aria-label="閉じる">×</button>
     <div class="viewer-stage"><img class="viewer-img" src="${src}" alt="" draggable="false"></div>`;
@@ -3749,13 +3794,20 @@ function stopPost() {
 async function renderPost({ id, query }) {
   stopPost();
 
+  // 通知から開いた直後は、ログインの確認がまだ終わっていない。
+  // ここで「ログインしていない」と決めつけるとみんなの記録へ飛ばしてしまう（以前の不具合）ので、
+  // 確認が終わるまで待つ（終わったら描き直される）
+  if (!me.ready) {
+    app.innerHTML = header('記録', { back: '#/feed', backLabel: 'みんなの記録' }) + loadingView();
+    return;
+  }
   if (!me.user) {
     goReplace('#/feed');
     return;
   }
 
   app.innerHTML = header('記録', { back: '#/feed', backLabel: 'みんなの記録' }) + `
-    <div id="post-slot"><p class="empty">読み込んでいます…</p></div>
+    <div id="post-slot">${loadingView()}</div>
 
     <div class="comment-open">
       <button type="button" class="icon-btn is-big" id="comment-open" aria-expanded="false">
@@ -3775,7 +3827,7 @@ async function renderPost({ id, query }) {
     </div>
 
     <h2 class="section-title">コメント</h2>
-    <ul class="comment-list" id="comment-list"><li class="empty">読み込んでいます…</li></ul>`;
+    <ul class="comment-list" id="comment-list"><li class="loading-li">${loadingView('', true)}</li></ul>`;
 
   const slot = $('#post-slot');
   const list = $('#comment-list');
@@ -4143,7 +4195,7 @@ async function renderUserPosts({ id, query }) {
   const shopFilter = query?.get('shop') ?? '';
   const titleOf = (name) => (isMe ? '自分の投稿' : `${name ?? ''}の記録`);
   if (!me.ready) {
-    app.innerHTML = header('共有した記録') + '<p class="empty">確認しています…</p>';
+    app.innerHTML = header('共有した記録') + loadingView();
     return; // ログインの確認が終わったら描き直される
   }
   if (!me.user) {
@@ -4167,7 +4219,7 @@ async function renderUserPosts({ id, query }) {
         </div>` : ''}
       <dl class="shop-stats" id="mp-stats"></dl>
       <div id="mp-sort"></div>
-      <ul class="post-list" id="myposts-list"><li class="empty">読み込んでいます…</li></ul>
+      <ul class="post-list" id="myposts-list"><li class="loading-li">${loadingView()}</li></ul>
     </section>`;
 
   let posts = null;
@@ -4271,7 +4323,7 @@ async function renderSearch() {
   const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   const title = 'ユーザーを探す';
   if (!me.ready) {
-    app.innerHTML = header(title, { back: '#/feed', backLabel: 'みんなの記録' }) + '<p class="empty">確認しています…</p>';
+    app.innerHTML = header(title, { back: '#/feed', backLabel: 'みんなの記録' }) + loadingView();
     return; // ログインの確認が終わったら描き直される
   }
   if (!me.user) {
@@ -4286,7 +4338,7 @@ async function renderSearch() {
         <input id="search-input" type="search" placeholder="名前で探す" autocomplete="off" enterkeyhint="search" value="${esc(searchWord)}">
       </label>
       <p class="hint" id="search-count"></p>
-      <ul class="follow-list" id="search-list"><li class="empty">読み込んでいます…</li></ul>
+      <ul class="follow-list" id="search-list"><li class="loading-li">${loadingView()}</li></ul>
     </section>`;
 
   const input = $('#search-input');
@@ -4343,7 +4395,7 @@ async function renderSearch() {
 async function renderFollows({ id, query }) {
   const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   if (!me.ready) {
-    app.innerHTML = header('プロフィール', { back: '#/feed', backLabel: 'みんなの記録' }) + '<p class="empty">確認しています…</p>';
+    app.innerHTML = header('プロフィール', { back: '#/feed', backLabel: 'みんなの記録' }) + loadingView();
     return; // ログインの確認が終わったら描き直される（フォローの通知から開いたときなど）
   }
   if (!me.user) {
@@ -4355,7 +4407,7 @@ async function renderFollows({ id, query }) {
   const title = type === 'followers' ? 'フォロワー' : 'フォロー中';
   const backTo = { back: `#/user/${id}`, backLabel: 'プロフィール' };
 
-  app.innerHTML = header(title, backTo) + '<p class="empty">読み込んでいます…</p>';
+  app.innerHTML = header(title, backTo) + loadingView();
 
   let members = [];
   let profile = null;
@@ -4394,7 +4446,7 @@ async function renderFollows({ id, query }) {
 async function renderUser({ id }) {
   const alive = navGuard(); // 読み込み中に別の画面へ移ったら、あとから描き込まない
   if (!me.ready) {
-    app.innerHTML = header('プロフィール', { back: '#/feed', backLabel: 'みんなの記録' }) + '<p class="empty">確認しています…</p>';
+    app.innerHTML = header('プロフィール', { back: '#/feed', backLabel: 'みんなの記録' }) + loadingView();
     return; // ログインの確認が終わったら描き直される（フォローの通知から開いたときなど）
   }
   if (!me.user) {
@@ -4417,7 +4469,7 @@ async function renderUser({ id }) {
   app.innerHTML = header('プロフィール', backTo) + `
     <section class="user">
       <div class="user-head">
-        <span class="user-avatar" id="u-avatar"><img src="${avatarOf(profile?.avatar)}" alt=""></span>
+        <button type="button" class="user-avatar" id="u-avatar" aria-label="アイコンを拡大"><img src="${avatarOf(profile?.avatar)}" alt=""></button>
         <div class="user-lines">
           <h2 class="user-name" id="u-name">${esc(profile?.nickname ?? '')}</h2>
           <div id="u-bio"></div>
@@ -4426,7 +4478,7 @@ async function renderUser({ id }) {
       </div>
       <div id="u-actions"></div>
       <dl class="shop-stats" id="u-stats"></dl>
-      <div id="u-body"><p class="empty">読み込んでいます…</p></div>
+      <div id="u-body">${loadingView()}</div>
     </section>`;
 
   // --- 描き込みの部品。読めたものが増えるたびに呼ぶ ---
@@ -4441,7 +4493,10 @@ async function renderUser({ id }) {
       const eligibleTier = badgeTierForCount(posts.length);
       badge = badgeImg(Math.min(profile?.badgeChoice ?? eligibleTier, eligibleTier));
     }
-    $('#u-avatar').innerHTML = `<img src="${avatarOf(profile?.avatar)}" alt="">`;
+    const avatarSrc = avatarOf((isMe ? me.profile : profile)?.avatar ?? profile?.avatar);
+    $('#u-avatar').innerHTML = `<img src="${avatarSrc}" alt="">`;
+    // アイコンをタップすると大きく表示する
+    $('#u-avatar').onclick = () => openPhoto(avatarSrc, { round: true });
     $('#u-name').innerHTML = esc(profile?.nickname ?? '名無し') + badge;
     $('#u-bio').innerHTML = bio ? `<p class="user-bio">${esc(bio)}</p>` : '';
   }
@@ -4764,6 +4819,19 @@ function downloadFile(file) {
 //   items   … 変更点。「見出し：説明」と書くと、見出しが太字になる
 const CHANGELOG = [
   {
+    version: 'ramen-log-v48',
+    date: '2026-10-15',
+    title: '箸と丼のバッジが登場',
+    lead: '準備中だったバッジがそろいました。ほかにも細かいところを直しています。',
+    items: [
+      'バッジ：「準備中」だった箸（5〜15杯）と丼（35〜45杯）のバッジが手に入るようになりました。箸は味玉、丼はチャーシューが段階ごとに増えていきます',
+      'アイコンの拡大：プロフィールのアイコンをタップすると、大きく表示されるようになりました',
+      '通知から開くとき：通知をタップしてから画面が出るまでが遅かったのを直しました。開いている途中で「みんなの記録」に飛ばされてしまうこともなくなりました',
+      '写真の回転：拡大だけしたいときに回ってしまわないようにし、細かい角度は下の目盛りをなぞって合わせられるようにしました',
+      '読み込み中：待っている間、ギルチキがくるくる回るようになりました',
+    ],
+  },
+  {
     version: 'ramen-log-v47',
     date: '2026-10-08',
     title: '返信の改善と、ほかの人の記録一覧',
@@ -4820,7 +4888,7 @@ async function markNewsRead() {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v47';
+const APP_VERSION = 'ramen-log-v48';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。
@@ -5497,7 +5565,7 @@ async function renderAccount() {
     : { back: '#/settings', backLabel: '設定' };
 
   app.innerHTML = header('アカウント', accountBack) + `<section class="account" id="account-slot">
-    <p class="empty">確認しています…</p>
+    ${loadingView()}
   </section>`;
   const slot = $('#account-slot');
 

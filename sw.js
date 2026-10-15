@@ -11,7 +11,7 @@
 // これによって、ログイン画面を開くたびに時間がかかるのを防ぐ。
 // =====================================================
 
-const CACHE_NAME = 'ramen-log-v47';
+const CACHE_NAME = 'ramen-log-v48';
 const FIREBASE_CACHE = 'ramen-log-firebase-v1';
 const APP_FILES = [
   './',
@@ -27,6 +27,12 @@ const APP_FILES = [
   './badge-renge1.png',
   './badge-renge2.png',
   './badge-renge3.png',
+  './badge-hashi1.png',
+  './badge-hashi2.png',
+  './badge-hashi3.png',
+  './badge-don1.png',
+  './badge-don2.png',
+  './badge-don3.png',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -133,11 +139,15 @@ self.addEventListener('notificationclick', (event) => {
   const url = payload.type === 'follow' && payload.uid
     ? `./#/user/${payload.uid}`
     : postId ? `./#/post/${postId}` : './#/feed';
+  // すでにアプリが開いているときは、読み込み直さずに画面だけ切り替えてもらう。
+  // （以前は client.navigate() でページごと読み込み直していたため、
+  //   通知をタップしてから表示されるまでが遅かった）
+  const hash = url.slice(url.indexOf('#'));
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       for (const client of list) {
         if ('focus' in client) {
-          client.navigate(url);
+          client.postMessage({ type: 'open', hash });
           return client.focus();
         }
       }

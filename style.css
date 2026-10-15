@@ -3712,3 +3712,65 @@ body.gate-open { overflow: hidden; }
   font-weight: 700;
   text-decoration: none;
 }
+
+/* ===== プロフィールのアイコン：タップで拡大 ===== */
+button.user-avatar {
+  padding: 0;
+  color: inherit;
+  cursor: zoom-in;
+  transition: transform 0.1s;
+}
+button.user-avatar:active { transform: scale(0.95); }
+
+/* アイコンを拡大したときは丸く出す */
+.viewer.is-round .viewer-img {
+  width: min(84vw, 420px);
+  height: min(84vw, 420px);
+  max-width: none;
+  max-height: none;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface);
+}
+
+/* ===== 読み込み中：ギルチキがゆっくりくるくる回る ===== */
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 0 28px;
+  color: var(--muted);
+  font-size: 13px;
+  /* すぐ読み終わるときにチラッと見えないよう、少し待ってからふわっと出す */
+  opacity: 0;
+  animation: loading-in 0.3s ease-out 0.25s forwards;
+}
+
+.loading-chiki {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  animation: loading-spin 2.6s linear infinite;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.loading.is-small { padding: 18px 0; }
+.loading.is-small .loading-chiki { width: 40px; height: 40px; }
+
+/* 一覧の中に出すときは、区切り線や枠を付けない */
+.loading-li { list-style: none; border: none; }
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes loading-in {
+  to { opacity: 1; }
+}
+
+/* 動きを減らす設定の人には、回さずに表示だけする */
+@media (prefers-reduced-motion: reduce) {
+  .loading { opacity: 1; }
+}
