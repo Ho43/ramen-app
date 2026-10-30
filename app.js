@@ -1064,7 +1064,7 @@ function notificationsOn() {
 // 宛先はOSやブラウザの都合で変わることがあり、以前は「通知を有効にする」を
 // 押したときに1回取るだけだったので、変わったあとは古い宛先に送り続けて届かなくなっていた。
 //   ・変わっていたら、新しい宛先を保存して、古い宛先は消す
-//   ・変わっていなくても、プロフィールに入っていなければ入れ直す
+//   ・変わっていなくても、プロフィールから消えていれば、宛先を作り直して入れ直す
 //     （送れなかった宛先をサーバー側で消した場合や、ログアウトして入り直した場合）
 // 通知を一度も有効にしていない端末では、勝手に有効にはしない。
 async function refreshFcmToken(user) {
@@ -1072,10 +1072,18 @@ async function refreshFcmToken(user) {
   try {
     if (!(await notificationsAvailable())) return;
     const reg = await navigator.serviceWorker.ready;
-    const token = await cloud.getFcmToken(VAPID_KEY, reg);
-    if (!token || me.user !== user) return;
+    // プロフィールの読み込みを待つ（宛先が登録されているかを見るため）
+    const profile = me.profile ?? await cloud.getProfile(user.uid);
+    if (me.user !== user) return;
+    const saved = profile?.fcmTokens ?? [];
     const oldToken = localStorage.getItem(FCM_TOKEN_KEY);
-    const saved = me.profile?.fcmTokens ?? [];
+    let token = await cloud.getFcmToken(VAPID_KEY, reg);
+    // 端末が覚えている宛先がプロフィールから消えている＝送る側で「届かない」と判断されて消された。
+    // 同じ宛先を入れ直しても届かないので、作り直す
+    if (token && token === oldToken && !saved.includes(token)) {
+      token = await cloud.resetFcmToken(VAPID_KEY, reg);
+    }
+    if (!token || me.user !== user) return;
     if (token !== oldToken || !saved.includes(token)) {
       await cloud.saveFcmToken(user.uid, token);
       localStorage.setItem(FCM_TOKEN_KEY, token);

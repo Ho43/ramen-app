@@ -356,6 +356,21 @@ export async function getFcmToken(vapidKey, swRegistration) {
   return m.getToken(m.getMessaging(app), { vapidKey, serviceWorkerRegistration: swRegistration });
 }
 
+// 今の宛先を捨てて、新しい宛先を発行し直す。
+// 送る側（Cloud Functions）で「もう届かない宛先」として消された宛先は、
+// 端末の中にはまだ覚えられていて、getFcmToken で取り直しても同じものが返ってくることがある。
+// そのまま入れ直しても届かないので、いったん捨ててから作り直す
+export async function resetFcmToken(vapidKey, swRegistration) {
+  const { app, m } = await messaging();
+  const messagingInstance = m.getMessaging(app);
+  try {
+    await m.deleteToken(messagingInstance);
+  } catch (err) {
+    console.warn('古い宛先を捨てられませんでした', err);
+  }
+  return m.getToken(messagingInstance, { vapidKey, serviceWorkerRegistration: swRegistration });
+}
+
 // 発行した宛先を、自分のプロフィールに覚えておく（複数端末ぶん配列で持つ）
 export async function saveFcmToken(uid, token) {
   const { db, f } = await store();
