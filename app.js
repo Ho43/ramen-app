@@ -498,17 +498,31 @@ const isMuted = (uid) => mutedUids().includes(uid);
 const followUids = () => me.profile?.follows ?? [];
 const isFollowing = (uid) => followUids().includes(uid);
 
-// 前回見てから増えた、他の人の共有の数を数える
+// 前回見てから増えた、他の人の共有の数を数える。
+// ホームを開くたびに呼ばれるので、通信を減らすために次の順で調べる：
+//   1. まず「新しい投稿が何件あるか」だけを数える（写真は取らないので軽い）
+//   2. 0件ならそこで終わり（ほとんどの場合はここで終わる）
+//   3. 1件以上あるときだけ、増えたぶんの投稿を取って、自分の投稿と通知を切っている人を除く
+// さらに、同じ条件で少し前に調べたばかりなら、その結果を使い回す。
+let unreadMemo = { since: 0, uid: null, at: 0, value: 0 };
+const UNREAD_MEMO_MS = 2 * 60 * 1000; // 2分以内なら調べ直さない
+
 async function countUnread() {
   if (!me.user) return 0;
   const since = feedSeenAt();
   if (!since) return 0; // 一度も見ていないうちは知らせない
+  const now = Date.now();
+  if (unreadMemo.since === since && unreadMemo.uid === me.user.uid && now - unreadMemo.at < UNREAD_MEMO_MS) {
+    return unreadMemo.value;
+  }
   try {
-    const posts = await cloud.getRecentPosts(30);
-    return posts.filter((p) => {
-      const at = (p.createdAt?.seconds ?? 0) * 1000;
-      return at > since && p.uid !== me.user.uid && !isMuted(p.uid);
-    }).length;
+    let value = 0;
+    if (await cloud.countPostsSince(since) > 0) {
+      const posts = await cloud.getPostsSince(since, 30);
+      value = posts.filter((p) => p.uid !== me.user.uid && !isMuted(p.uid)).length;
+    }
+    unreadMemo = { since, uid: me.user.uid, at: now, value };
+    return value;
   } catch (err) {
     console.error(err);
     return 0;
@@ -1177,7 +1191,7 @@ function badgeFlash(tier) {
 async function maybeCelebrateBadge() {
   if (!me.user) return;
   try {
-    const count = (await cloud.getPostsByUser(me.user.uid)).length;
+    const count = await cloud.countPostsByUser(me.user.uid);
     if (count === 0 || count % BADGE_STEP !== 0) return;
     const tier = badgeTierForCount(count);
     if (tier < 1 || tier > BADGE_MAX) return;
@@ -1840,7 +1854,7 @@ async function renderBadges() {
 
   let count = 0;
   try {
-    count = (await cloud.getPostsByUser(me.user.uid)).length;
+    count = await cloud.countPostsByUser(me.user.uid);
   } catch (err) {
     console.error(err);
     if (!alive()) return;
@@ -5600,7 +5614,7 @@ async function renderAccount() {
       console.error(err);
     }
     try {
-      myCount = (await cloud.getPostsByUser(user.uid)).length;
+      myCount = await cloud.countPostsByUser(user.uid);
     } catch (err) {
       console.error(err);
     }

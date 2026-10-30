@@ -271,10 +271,27 @@ export async function toggleCommentGuilty(postId, commentId, uid, on) {
   });
 }
 
-// 未読の件数を数えるために、新しい投稿だけを取ってくる
-export async function getRecentPosts(max = 30) {
+// 指定した時刻より新しい投稿が何件あるかを、件数だけ数える。
+// 投稿そのもの（写真入り）は取ってこないので、通信はほぼかからない
+export async function countPostsSince(sinceMs) {
   const { db, f } = await store();
-  const snap = await f.getDocs(f.query(f.collection(db, 'posts'), f.orderBy('createdAt', 'desc'), f.limit(max)));
+  const q = f.query(f.collection(db, 'posts'), f.where('createdAt', '>', f.Timestamp.fromMillis(sinceMs)));
+  const snap = await f.getCountFromServer(q);
+  return snap.data().count;
+}
+
+// 指定した時刻より新しい投稿だけを取ってくる（未読の中身を確かめるとき用）。
+// 以前は件数に関係なく最新30件を写真ごと取っていたが、
+// 新しく増えたぶんだけを取るようにした
+export async function getPostsSince(sinceMs, max = 30) {
+  const { db, f } = await store();
+  const q = f.query(
+    f.collection(db, 'posts'),
+    f.where('createdAt', '>', f.Timestamp.fromMillis(sinceMs)),
+    f.orderBy('createdAt', 'desc'),
+    f.limit(max),
+  );
+  const snap = await f.getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
@@ -296,6 +313,15 @@ export async function getPostsTaggedWith(uid, onCached) {
   const q = f.query(f.collection(db, 'posts'), f.where('withUids', 'array-contains', uid), f.limit(200));
   await fromCache(f, q, onCached, (snap) => (snap.empty ? null : toPosts(snap)));
   return toPosts(await f.getDocs(q));
+}
+
+// その人が共有した記録の数だけを数える。
+// 以前は getPostsByUser で写真ごと全部取ってから .length で数えていた
+export async function countPostsByUser(uid) {
+  const { db, f } = await store();
+  const q = f.query(f.collection(db, 'posts'), f.where('uid', '==', uid));
+  const snap = await f.getCountFromServer(q);
+  return snap.data().count;
 }
 
 /* ---------- 通知（プッシュ通知） ---------- */

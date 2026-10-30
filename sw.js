@@ -54,6 +54,9 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// この Service Worker が動いている間に、すでに新しいか確かめたファイル
+const checkedPaths = new Set();
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
@@ -78,23 +81,31 @@ self.addEventListener('fetch', (event) => {
   if (new URL(request.url).pathname.endsWith('/sw.js')) return;
 
   // まずキャッシュにあるものを返して、すぐ画面を出す。
-  // 新しいファイルは裏で取り直してキャッシュを入れ替えるので、次に開いたときから新しくなる。
-  // （以前はコード・見た目を毎回ネットから取り直していたため、電波が弱いと
-  //   起動のたびにその待ち時間が発生していた。更新に気づく仕組みは、
-  //   起動時の帯と設定の「アプリの更新」が別に持っているので、これで困らない）
+  // 新しいファイルは裏で確かめて、変わっていればキャッシュを入れ替える（次に開いたときから新しくなる）。
+  //
+  // 通信量を減らすための工夫が2つある：
+  //  ・確かめるときは cache: 'no-cache' を使う。これは「前と変わってる？」とサーバーに聞くだけで、
+  //    変わっていなければ中身は送られてこない（304という短い返事だけ）。
+  //    以前は 'no-store' で、変わっていなくても app.js や style.css を毎回まるごと取り直していた。
+  //  ・同じファイルを確かめるのは、この Service Worker が動いている間に1回だけ。
+  //    一覧にバッジ画像が何十個並んでも、確かめに行くのは1回で済む。
   event.respondWith(
     caches.match(request, { ignoreSearch: true }).then((cached) => {
       const path = new URL(request.url).pathname;
-      const alwaysFresh = /\.(html|js|css)$|\/$/.test(path);
-      const fresh = fetch(request, alwaysFresh ? { cache: 'no-store' } : {})
+      const fresh = () => fetch(request, { cache: 'no-cache' })
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
           return response;
-        })
-        .catch(() => cached);
-      // キャッシュがあればそれを返し、取り直しは裏で進める
-      return cached || fresh;
+        });
+      if (!cached) return fresh();
+      if (!checkedPaths.has(path)) {
+        checkedPaths.add(path);
+        fresh().catch(() => {}); // 電波がないときは、キャッシュのままでいい
+      }
+      return cached;
     })
   );
 });
