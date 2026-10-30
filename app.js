@@ -19,6 +19,7 @@
 
 import * as db from './db.js';
 import * as cloud from './cloud.js';
+import { CHIKI_OUTFITS, outfitById, outfitLayers } from './costumes.js';
 
 const app = document.getElementById('app');
 const $ = (selector) => app.querySelector(selector);
@@ -1130,30 +1131,25 @@ const pick = (list) => list[Math.floor(Math.random() * list.length)];
    端末の中だけのお楽しみ要素。ポイントも衣装も、この端末にしか残らない
    （Firebaseには送らない）。db.js の 'chiki' に1件だけ保存する。 */
 
-// 位置は giruchiki.png（横向き、頭が左上）の実際の見た目に合わせた目分量。
-// .chiki は正方形の枠で、画像は object-fit: contain で収まっている。
-const COSTUMES = [
-  { id: 'beret', name: 'ベレー帽', rarity: 1, vbW: 54, vbH: 20,
-    svg: '<ellipse cx="27" cy="12" rx="20" ry="8" fill="#C0392B"/><circle cx="27" cy="4" r="3" fill="#8A2419"/>',
-    left: 12, top: 1 },
-  { id: 'ribbon', name: '首もとのリボン', rarity: 1, vbW: 22, vbH: 14,
-    svg: '<path d="M0 7 L11 0 L11 14 Z" fill="#F2A007"/><path d="M22 7 L11 0 L11 14 Z" fill="#F2A007"/><circle cx="11" cy="7" r="3.4" fill="#C0392B"/>',
-    left: 12, top: 40 },
-  { id: 'sunglasses', name: 'サングラス', rarity: 2, vbW: 36, vbH: 14,
-    svg: '<rect x="0" y="2" width="16" height="11" rx="5.5" fill="#1C1A17"/><rect x="20" y="2" width="16" height="11" rx="5.5" fill="#1C1A17"/><rect x="16" y="6" width="4" height="3" fill="#1C1A17"/>',
-    left: 15, top: 22 },
-  { id: 'scarf', name: 'マフラー', rarity: 2, vbW: 46, vbH: 34,
-    svg: '<path d="M0 4 Q23 -4 46 4 L46 15 Q23 22 0 15 Z" fill="#8FBF4A"/><rect x="6" y="14" width="8" height="20" rx="2" fill="#8FBF4A"/>',
-    left: 8, top: 39 },
-  { id: 'crown', name: '金の王冠', rarity: 3, vbW: 36, vbH: 16,
-    svg: '<path d="M0 16 L0 4 L9 11 L18 0 L27 11 L36 4 L36 16 Z" fill="#F2A007" stroke="#A96D05" stroke-width="1.5" stroke-linejoin="round"/>',
-    left: 15, top: -5 },
-  { id: 'halo', name: '天使の輪', rarity: 3, vbW: 36, vbH: 11,
-    svg: '<ellipse cx="18" cy="6" rx="16" ry="5" fill="none" stroke="#F2A007" stroke-width="3"/>',
-    left: 15, top: -15 },
-];
+// 衣装の中身（絵）は costumes.js にまとめてある。
+// slot が 'body'（からだ）と 'head'（あたま）の2種類で、それぞれ1つずつ着られる。
+// event が付いているものはイベントで配る限定品で、ガチャからは出ない。
+// レア度はなく、ガチャではどれも同じ確率で出る。
+const COSTUMES = CHIKI_OUTFITS;
+const costumeById = outfitById;
+const GACHA_POOL = CHIKI_OUTFITS.filter((c) => !c.event);
+const slotKey = (slot) => (slot === 'body' ? 'equippedBody' : 'equippedHead');
 
-const costumeById = (id) => COSTUMES.find((c) => c.id === id) ?? null;
+// v48までの簡易アクセサリーからの引き継ぎ。
+// 新しい衣装に似たものがあればそれに置き換え、似たものがないものはガチャ1回分のポイントを返す
+const LEGACY_COSTUMES = {
+  sunglasses: { to: 'head_sunglasses', name: 'サングラス' },
+  crown: { to: 'head_crown', name: '金の王冠' },
+  halo: { to: 'head_halo', name: '天使の輪' },
+  ribbon: { to: 'head_ribbon', name: '首もとのリボン' },
+  beret: { to: null, name: 'ベレー帽' },
+  scarf: { to: null, name: 'マフラー' },
+};
 
 /* ===================== 名前バッジ（共有した杯数） =====================
    共有した記録の数（他の人にも見えている数）に応じて、段階が上がっていく。
@@ -1261,13 +1257,24 @@ async function maybeCelebrateBadge() {
   }
 }
 
-let chikiState = { points: 0, lastFed: null, owned: [], equipped: null, redeemedCodes: [], pointLog: [] };
+const CHIKI_DEFAULT = {
+  points: 0, lastFed: null, owned: [], equippedBody: null, equippedHead: null,
+  redeemedCodes: [], receivedEvents: [], pointLog: [],
+};
+let chikiState = { ...CHIKI_DEFAULT };
 let chikiReady = false;
 
 async function loadChikiState() {
   try {
     const saved = await db.get('chiki', 'me');
-    if (saved) chikiState = { points: 0, lastFed: null, owned: [], equipped: null, redeemedCodes: [], pointLog: [], ...saved };
+    if (saved) {
+      const { id: _id, ...rest } = saved;
+      chikiState = { ...CHIKI_DEFAULT, ...rest };
+      if ('equipped' in rest) {
+        migrateLegacyCostumes();
+        await saveChikiState();
+      }
+    }
   } catch (err) {
     console.error(err);
   }
@@ -1276,6 +1283,33 @@ async function loadChikiState() {
 
 function saveChikiState() {
   return db.put('chiki', { id: 'me', ...chikiState });
+}
+
+// 古い衣装（equipped が1つだけの形）を、新しい衣装（からだ・あたまの2枠）に移す
+function migrateLegacyCostumes() {
+  const owned = new Set();
+  const log = [];
+  let refund = 0;
+  for (const id of chikiState.owned ?? []) {
+    if (costumeById(id)) { owned.add(id); continue; } // すでに新しい衣装
+    const legacy = LEGACY_COSTUMES[id];
+    if (!legacy) continue;
+    if (legacy.to) {
+      owned.add(legacy.to);
+    } else {
+      refund += GACHA_COST;
+      log.push(pointEntry(GACHA_COST, `衣装の入れ替えでお返し（${legacy.name}）`));
+    }
+  }
+  const wasEquipped = LEGACY_COSTUMES[chikiState.equipped]?.to ?? null;
+  const { equipped: _old, ...rest } = chikiState;
+  chikiState = {
+    ...rest,
+    owned: [...owned],
+    equippedHead: wasEquipped && owned.has(wasEquipped) ? wasEquipped : null,
+    points: chikiState.points + refund,
+    pointLog: log.length ? withPointLog(...log) : chikiState.pointLog,
+  };
 }
 
 // ── ポイントの履歴 ──────────────────────────────
@@ -1334,7 +1368,6 @@ async function feedChiki() {
 }
 
 const GACHA_COST = 100;
-const RARITY_WEIGHT = { 1: 75, 2: 22, 3: 3 };
 
 // テストプレイ用の引き換えコード。1人1回だけ使える（chikiState.redeemedCodes に記録する）。
 // ガチャを何十回も試せるよう、多めのポイントにしてある
@@ -1362,13 +1395,8 @@ async function redeemCode(input) {
 // ガチャを1回引く。持っている衣装が出たら、代わりにポイントを返す
 async function drawGacha() {
   if (chikiState.points < GACHA_COST) return null;
-  const total = COSTUMES.reduce((sum, c) => sum + RARITY_WEIGHT[c.rarity], 0);
-  let r = Math.random() * total;
-  let got = COSTUMES[0];
-  for (const c of COSTUMES) {
-    r -= RARITY_WEIGHT[c.rarity];
-    if (r <= 0) { got = c; break; }
-  }
+  // レア度はないので、ガチャに入っている衣装から同じ確率で1つ選ぶ
+  const got = GACHA_POOL[Math.floor(Math.random() * GACHA_POOL.length)];
   const already = chikiState.owned.includes(got.id);
   const refund = already ? 5 : 0; // ダブりは少しだけポイントが戻る
   const log = [pointEntry(-GACHA_COST, `ガチャを引いた（${got.name}）`)];
@@ -1378,37 +1406,81 @@ async function drawGacha() {
     points: chikiState.points - GACHA_COST + refund,
     pointLog: withPointLog(...log),
     owned: already ? chikiState.owned : [...chikiState.owned, got.id],
-    equipped: chikiState.equipped ?? got.id,
+    // その枠に何も着ていなければ、そのまま着る
+    [slotKey(got.slot)]: chikiState[slotKey(got.slot)] ?? got.id,
   };
   await saveChikiState();
   return { costume: got, duplicate: already };
 }
 
-async function equipCostume(id) {
-  chikiState = { ...chikiState, equipped: id };
+// slot = 'body' か 'head'。id が null なら、その枠は何も着ない
+async function equipCostume(slot, id) {
+  chikiState = { ...chikiState, [slotKey(slot)]: id };
   await saveChikiState();
 }
 
-// 衣装のSVGを、頭やからだの位置に重ねる。
-// 幅を container の何%にするかと、元の縦横比から、高さも%で計算する
-// （.chiki は正方形なので、幅と高さの%の基準は同じ）
-function costumeOverlay() {
-  const c = costumeById(chikiState.equipped);
-  if (!c) return '';
-  const widthPct = c.vbW / 1.5; // 見た目にちょうどいい大きさに調整した経験値
-  const heightPct = widthPct * (c.vbH / c.vbW);
-  return `<svg class="chiki-costume" viewBox="0 0 ${c.vbW} ${c.vbH}"
-      style="left:${c.left}%; top:${c.top}%; width:${widthPct}%; height:${heightPct}%;"
-      xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${c.svg}</svg>`;
+/* ── イベントでの衣装の配布 ──
+   期間中にガチャ画面を開くと受け取れる。受け取ったかどうかは chikiState.receivedEvents に残す。
+   ホームでは、受け取るまでギルチキに贈り物のアイコンが付き、セリフが変わる */
+const HALLOWEEN_2026 = {
+  id: 'halloween2026',
+  name: 'ハロウィンのおすそわけ',
+  items: ['body_pumpkin', 'head_witch'],
+  from: '2026-10-31',
+  until: '2026-11-11', // この日まで受け取れる
+  talk: 'トリック・オア・トリート！',
+};
+const EVENTS = [HALLOWEEN_2026];
+
+// 今受け取れる（期間中で、まだ受け取っていない）イベント
+function pendingEvent() {
+  const today = todayStr();
+  return EVENTS.find((ev) => today >= ev.from && today <= ev.until
+    && !(chikiState.receivedEvents ?? []).includes(ev.id)) ?? null;
 }
 
+async function receiveEvent(ev) {
+  chikiState = {
+    ...chikiState,
+    owned: [...new Set([...chikiState.owned, ...ev.items])],
+    receivedEvents: [...(chikiState.receivedEvents ?? []), ev.id],
+  };
+  await saveChikiState();
+}
+
+// 贈り物のアイコン（説明の文字は付けず、これだけで気づいてもらう）
+function giftIcon() {
+  return `<svg viewBox="0 0 32 32" aria-hidden="true">
+    <rect x="4" y="13" width="24" height="16" rx="2" fill="#6B4FA0" stroke="#2B2B2B" stroke-width="2"/>
+    <rect x="2.5" y="9" width="27" height="6" rx="1.5" fill="#7E62B5" stroke="#2B2B2B" stroke-width="2"/>
+    <rect x="13.5" y="9" width="5" height="20" fill="#F08A24"/>
+    <path d="M16 9 Q9 1 7 5 Q6 9 16 9 Q23 1 25 5 Q26 9 16 9 Z" fill="#F08A24" stroke="#2B2B2B" stroke-width="2" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+// 着ている衣装（からだ・あたま）を、絵にぴったり重ねる
+function costumeOverlay() {
+  return outfitLayers(chikiState.equippedBody, chikiState.equippedHead);
+}
+
+// 指定した衣装を着せたギルチキ（一覧の見本や、受け取りの演出で使う。動きは付けない）
+function chikiFigure(bodyId = null, headId = null, extraClass = '') {
+  return `<span class="chiki chiki-t1 ${extraClass}"><span class="chiki-body"><img src="./giruchiki.png" alt="" draggable="false">${outfitLayers(bodyId, headId)}</span></span>`;
+}
+
+// 衣装1つだけを着せた見本
+const figureOf = (c) => (c.slot === 'body' ? chikiFigure(c.id, null) : chikiFigure(null, c.id));
+
 // 絵は1枚だけ。点数による違いは、傾き・跳ね・きらきら・光で表す（見た目はCSS側）
-function mascot(score) {
+function mascot(score, { gift = false } = {}) {
   const tier = faceTier(score);
   const sparks = tier >= 2
     ? '<i class="spark s1"></i><i class="spark s2"></i><i class="spark s3"></i>'
     : '';
-  return `<span class="chiki chiki-t${tier}"><img src="./giruchiki.png" alt="" draggable="false">${sparks}${costumeOverlay()}</span>`;
+  // 絵と衣装は .chiki-body にまとめて入れ、跳ねる・傾く動きはこの箱ごと動かす。
+  // 以前は絵（img）だけを動かしていたので、衣装がその場に取り残されてズレていた
+  const giftMark = gift ? `<span class="gift-mark">${giftIcon()}</span>` : '';
+  return `<span class="chiki chiki-t${tier}"><span class="chiki-body"><img src="./giruchiki.png" alt="" draggable="false">${costumeOverlay()}</span>${sparks}${giftMark}</span>`;
 }
 
 // 指定日から何日連続で記録があるかを数える
@@ -1632,9 +1704,13 @@ async function renderHome() {
   const subject = justSaved ?? (todays.length ? pick(todays) : null);
   const rec = recommendOne(records, shopMap);
   const unread = await newsUnreadCount();
-  const talk = subject
-    ? chikiTalk(records, subject)
-    : idleTalk(records, rec ? [rec.line] : []);
+  // 受け取れるイベントがあるあいだは、そのイベントのセリフにする
+  const eventNow = pendingEvent();
+  const talk = eventNow
+    ? eventNow.talk
+    : subject
+      ? chikiTalk(records, subject)
+      : idleTalk(records, rec ? [rec.line] : []);
   const showRecLink = Boolean(rec) && talk === rec.line;
   const talkSub = subject
     ? `${shopName(shopMap, subject.shopId)}・${subject.score}点`
@@ -1662,7 +1738,7 @@ async function renderHome() {
       </div>
 
       <button type="button" class="greet" id="greet-btn" aria-label="${fedToday() ? '今日はもう餌をあげました' : '餌をあげる'}">
-        ${mascot(subject?.score ?? 50)}
+        ${mascot(subject?.score ?? 50, { gift: Boolean(eventNow) })}
         <span class="greet-body">
           <span class="greet-talk">${esc(talk)}<small>${esc(talkSub)}</small></span>
           <span class="greet-foot">
@@ -1875,23 +1951,14 @@ async function renderRecommend() {
 
 /* ===================== ガチャ（衣装） ===================== */
 
-function rarityStars(rarity) {
-  return '★'.repeat(rarity) + '☆'.repeat(3 - rarity);
-}
-
 function costumeThumb(costume, { locked = false, equipped = false } = {}) {
-  const widthPct = costume.vbW / 1.5;
-  const heightPct = widthPct * (costume.vbH / costume.vbW);
   return `
-    <li class="cos-item${locked ? ' is-locked' : ''}${equipped ? ' is-equipped' : ''}" data-costume="${costume.id}">
+    <li class="cos-item${locked ? ' is-locked' : ''}${equipped ? ' is-equipped' : ''}" data-costume="${costume.id}" data-slot="${costume.slot}">
       <div class="cos-thumb">
-        ${locked
-          ? '<span class="cos-question">？</span>'
-          : `<svg viewBox="0 0 ${costume.vbW} ${costume.vbH}" style="width:${widthPct}%; height:${heightPct}%;"
-               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${costume.svg}</svg>`}
+        ${locked ? '<span class="cos-question">？</span>' : figureOf(costume)}
       </div>
       <span class="cos-name">${locked ? '？？？' : esc(costume.name)}</span>
-      <span class="cos-rarity">${rarityStars(costume.rarity)}</span>
+      ${costume.event && !locked ? '<span class="cos-limited">限定</span>' : ''}
       ${equipped ? '<span class="cos-badge">着用中</span>' : ''}
     </li>`;
 }
@@ -1991,44 +2058,83 @@ async function renderGacha() {
       <a class="about-link" href="#/about-chiki">ギルチキについて</a>
     </div>
 
+    <div id="gacha-event"></div>
+
     <button type="button" class="btn btn-primary btn-block" id="gacha-draw" ${chikiState.points < GACHA_COST ? 'disabled' : ''}>
       ガチャを引く（${GACHA_COST}pt）
     </button>
 
-    <h2 class="section-title">持っている衣装</h2>
-    <ul class="cos-grid" id="cos-owned"></ul>
+    <h2 class="section-title">からだ</h2>
+    <ul class="cos-grid" id="cos-body" data-slot="body"></ul>
+
+    <h2 class="section-title">あたま</h2>
+    <ul class="cos-grid" id="cos-head" data-slot="head"></ul>
 
     <h2 class="section-title">図鑑</h2>
     <ul class="cos-grid" id="cos-all"></ul>`;
 
-  function draw() {
+  function ownedList(slot) {
+    const key = slotKey(slot);
     const noneItem = `
-      <li class="cos-item${!chikiState.equipped ? ' is-equipped' : ''}" data-costume="">
+      <li class="cos-item${!chikiState[key] ? ' is-equipped' : ''}" data-costume="" data-slot="${slot}">
         <div class="cos-thumb cos-thumb-none">なし</div>
         <span class="cos-name">なし</span>
-        <span class="cos-rarity">&nbsp;</span>
-        ${!chikiState.equipped ? '<span class="cos-badge">着用中</span>' : ''}
+        ${!chikiState[key] ? '<span class="cos-badge">着用中</span>' : ''}
       </li>`;
-    $('#cos-owned').innerHTML = noneItem + chikiState.owned
-      .map((id) => costumeThumb(costumeById(id), { equipped: chikiState.equipped === id }))
+    return noneItem + chikiState.owned
+      .map(costumeById)
+      .filter((c) => c && c.slot === slot)
+      .map((c) => costumeThumb(c, { equipped: chikiState[key] === c.id }))
       .join('');
+  }
+
+  function draw() {
+    const ev = pendingEvent();
+    $('#gacha-event').innerHTML = ev ? `
+      <div class="event-card">
+        <span class="event-gift">${giftIcon()}</span>
+        <div class="event-figure">${chikiFigure(...ev.items)}</div>
+        <p class="event-name">${esc(ev.name)}</p>
+        <p class="hint">${Number(ev.until.slice(5, 7))}/${Number(ev.until.slice(8))}まで受け取れる</p>
+        <button type="button" class="btn btn-primary btn-block" id="event-receive">受け取る</button>
+      </div>` : '';
+    $('#cos-body').innerHTML = ownedList('body');
+    $('#cos-head').innerHTML = ownedList('head');
+    // 図鑑：ガチャで出るものは全部（持っていないものは？で）、限定品は持っているものだけ
     $('#cos-all').innerHTML = COSTUMES
+      .filter((c) => !c.event || chikiState.owned.includes(c.id))
       .map((c) => chikiState.owned.includes(c.id)
-        ? costumeThumb(c, { equipped: chikiState.equipped === c.id })
+        ? costumeThumb(c, { equipped: chikiState[slotKey(c.slot)] === c.id })
         : costumeThumb(c, { locked: true }))
       .join('');
     app.querySelector('.gacha-points').innerHTML = `${chikiState.points}<small>pt</small>`;
     app.querySelector('.gacha-mascot').innerHTML = mascot(80);
     $('#gacha-draw').disabled = chikiState.points < GACHA_COST;
+    const receiveBtn = $('#event-receive');
+    if (receiveBtn) {
+      receiveBtn.onclick = async () => {
+        receiveBtn.disabled = true;
+        await receiveEvent(ev);
+        const wear = await showEventReceived(ev);
+        if (wear) {
+          const [bodyId, headId] = ev.items;
+          chikiState = { ...chikiState, equippedBody: bodyId, equippedHead: headId };
+          await saveChikiState();
+        }
+        draw();
+      };
+    }
   }
 
-  // #cos-owned はこの画面限りの要素なので、そこに直接付ければ、
+  // 一覧はこの画面限りの要素なので、そこに直接付ければ、
   // 画面を離れたときに古い聞き手が残る心配がない
-  $('#cos-owned').addEventListener('click', (event) => {
-    const item = event.target.closest('[data-costume]');
-    if (!item) return;
-    equipCostume(item.dataset.costume || null).then(draw);
-  });
+  for (const list of [$('#cos-body'), $('#cos-head')]) {
+    list.addEventListener('click', (event) => {
+      const item = event.target.closest('[data-costume]');
+      if (!item) return;
+      equipCostume(list.dataset.slot, item.dataset.costume || null).then(draw);
+    });
+  }
 
   $('#gacha-draw').onclick = async () => {
     const btn = $('#gacha-draw');
@@ -2099,14 +2205,8 @@ function showGachaResult({ costume, duplicate }) {
   return new Promise((resolve) => {
     const host = document.createElement('div');
     host.className = 'sheet';
-    const widthPct = costume.vbW / 1.2;
-    const heightPct = widthPct * (costume.vbH / costume.vbW);
     host.innerHTML = `<div class="sheet-box gacha-result">
-      <p class="gr-rarity">${rarityStars(costume.rarity)}</p>
-      <div class="gr-thumb">
-        <svg viewBox="0 0 ${costume.vbW} ${costume.vbH}" style="width:${widthPct}%; height:${heightPct}%;"
-          xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${costume.svg}</svg>
-      </div>
+      <div class="gr-thumb">${figureOf(costume)}</div>
       <p class="gr-name">${esc(costume.name)}</p>
       ${duplicate ? '<p class="hint">すでに持っていたので、5pt戻ってきた。</p>' : '<p class="hint">はじめて手に入れた！</p>'}
       <button type="button" class="btn btn-primary btn-block" data-close>閉じる</button>
@@ -2122,12 +2222,37 @@ function showGachaResult({ costume, duplicate }) {
   });
 }
 
+// イベントの衣装を受け取ったときの演出。「さっそく着る」を押したら true を返す
+function showEventReceived(ev) {
+  return new Promise((resolve) => {
+    const host = document.createElement('div');
+    host.className = 'sheet';
+    const names = ev.items.map((id) => costumeById(id)?.name).filter(Boolean);
+    host.innerHTML = `<div class="sheet-box gacha-result event-result">
+      <div class="gr-thumb gr-thumb-big">${chikiFigure(...ev.items, 'is-pop')}</div>
+      <p class="gr-name">${esc(ev.name)}</p>
+      <p class="hint">${names.map(esc).join('と')}を受け取った！</p>
+      <button type="button" class="btn btn-primary btn-block" data-wear>さっそく着る</button>
+      <button type="button" class="btn btn-ghost btn-block" data-close>閉じる</button>
+    </div>`;
+    document.body.appendChild(host);
+    navigator.vibrate?.(16);
+    host.addEventListener('click', (event) => {
+      const wear = Boolean(event.target.closest('[data-wear]'));
+      if (wear || event.target.closest('[data-close]') || !event.target.closest('.sheet-box')) {
+        host.remove();
+        resolve(wear);
+      }
+    });
+  });
+}
+
 /* ===================== 図鑑 ===================== */
 
 /* ===================== ギルチキについて（#/about-chiki） =====================
    ガチャ画面の「ギルチキについて」から開く説明ページ。
    文章を直したいときは ABOUT_CHIKI を書き換える。
-   ガチャの確率やポイントは、実際の設定（RARITY_WEIGHT など）から計算して出すので、
+   ガチャのポイントなどは、実際の設定（GACHA_COST など）から計算して出すので、
    設定を変えればここの表示も自動で合う。 */
 
 const ABOUT_CHIKI = {
@@ -2190,7 +2315,7 @@ async function renderAboutChiki() {
         </li>
         <li>
           <strong>着せ替える</strong>
-          <span>ガチャ画面の「持っている衣装」を押すと、ギルチキがその衣装に着替える。</span>
+          <span>ガチャ画面の「からだ」「あたま」の衣装を押すと、ギルチキがその衣装に着替える。</span>
         </li>
       </ol>
 
@@ -4893,6 +5018,20 @@ function downloadFile(file) {
 //   items   … 変更点。「見出し：説明」と書くと、見出しが太字になる
 const CHANGELOG = [
   {
+    version: 'ramen-log-v49',
+    date: '2026-10-30',
+    title: 'ギルチキの着せ替えが新しくなりました',
+    lead: 'ギルチキの衣装を一新しました。ハロウィンの贈り物も届いています。',
+    items: [
+      '着せ替え：衣装が「からだ」と「あたま」の2つに分かれ、別々に着せられるようになりました。衣装は全部で30種類以上あり、ガチャではどれも同じ確率で出ます',
+      '前の衣装：持っていた衣装は、似ている新しい衣装に置き換わりました。似たものがないベレー帽とマフラーは、ガチャ1回分のポイントをお返ししています',
+      'ハロウィン：11月11日まで、ガチャ画面でかぼちゃの服と魔女の帽子を受け取れます',
+      '衣装のズレ：ギルチキが跳ねたり傾いたりしたとき、衣装がその場に残ってズレていたのを直しました',
+      '通知：通知が届かなくなることがあったのを直しました',
+      '通信量：モバイル通信の使用量を減らしました',
+    ],
+  },
+  {
     version: 'ramen-log-v48',
     date: '2026-10-15',
     title: '箸と丼のバッジが登場',
@@ -4962,7 +5101,7 @@ async function markNewsRead() {
 
 // sw.js の CACHE_NAME と同じ値にしておく。ここが今この端末で動いている版。
 // 新しい版を出すときは、sw.js と合わせてこちらの数字も上げる。
-const APP_VERSION = 'ramen-log-v48';
+const APP_VERSION = 'ramen-log-v49';
 
 // GitHubに置いてある sw.js を直接読んで、向こうの版を調べる。
 // キャッシュを通すと今使っている版が返ってきてしまうので no-store を付ける。

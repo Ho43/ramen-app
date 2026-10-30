@@ -11,7 +11,7 @@
 // これによって、ログイン画面を開くたびに時間がかかるのを防ぐ。
 // =====================================================
 
-const CACHE_NAME = 'ramen-log-v48';
+const CACHE_NAME = 'ramen-log-v49';
 const FIREBASE_CACHE = 'ramen-log-firebase-v1';
 const APP_FILES = [
   './',
@@ -20,6 +20,7 @@ const APP_FILES = [
   './app.js',
   './db.js',
   './cloud.js',
+  './costumes.js',
   './firebase-config.js',
   './giruchiki.png',
   './avatar-bowl.png',
@@ -147,9 +148,12 @@ self.addEventListener('notificationclick', (event) => {
   const payload = data.FCM_MSG?.data ?? data;
   const postId = data.postId ?? payload.postId;
   // フォローの通知はフォローしてくれた人のプロフィールへ
-  const url = payload.type === 'follow' && payload.uid
-    ? `./#/user/${payload.uid}`
-    : postId ? `./#/post/${postId}` : './#/feed';
+  // イベントのお知らせはガチャ画面へ（そこで贈り物を受け取れる）
+  const url = payload.type === 'event'
+    ? './#/gacha'
+    : payload.type === 'follow' && payload.uid
+      ? `./#/user/${payload.uid}`
+      : postId ? `./#/post/${postId}` : './#/feed';
   // すでにアプリが開いているときは、読み込み直さずに画面だけ切り替えてもらう。
   // （以前は client.navigate() でページごと読み込み直していたため、
   //   通知をタップしてから表示されるまでが遅かった）

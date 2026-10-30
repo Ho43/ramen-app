@@ -152,20 +152,27 @@ a { color: var(--yolk); }
   flex-shrink: 0;
 }
 
-.chiki img {
+/* 絵と衣装をまとめた箱。傾き・跳ねはこの箱ごと動かすので、衣装も一緒についてくる */
+.chiki-body {
   position: relative;
   z-index: 1;
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
   transform-origin: 50% 100%;
+}
+
+.chiki img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   -webkit-user-select: none;
   user-select: none;
 }
 
 /* 0〜39点：うつむいて、汗をひとつ */
-.chiki-t0 img { transform: rotate(-7deg) translateY(4%); }
+.chiki-t0 .chiki-body { transform: rotate(-7deg) translateY(4%); }
 
 .chiki-t0::after {
   content: "";
@@ -180,10 +187,10 @@ a { color: var(--yolk); }
 }
 
 /* 70点以上：ときどき軽く跳ねる */
-.chiki-t2 img { animation: hop 1.8s ease-in-out infinite; }
+.chiki-t2 .chiki-body { animation: hop 1.8s ease-in-out infinite; }
 
 /* 95点以上：大きく跳ねて、背後に朱色の光 */
-.chiki-t3 img { animation: hop-big 0.7s ease-in-out infinite; }
+.chiki-t3 .chiki-body { animation: hop-big 0.7s ease-in-out infinite; }
 
 .chiki-t3::before {
   content: "";
@@ -231,12 +238,48 @@ a { color: var(--yolk); }
   50% { opacity: 1; transform: scale(1); }
 }
 
-/* 衣装（ガチャで手に入るもの）。頭やからだの位置に重ねる */
-.chiki-costume {
+/* 衣装（ガチャで手に入るもの）。絵（img）と同じ大きさで重ねる。
+   中身は costumes.js（座標は giruchiki.png と同じ 414×440） */
+.chiki-wear,
+.chiki-top {
   position: absolute;
-  z-index: 3;
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible; /* 帽子などが頭より上にはみ出せるように */
   pointer-events: none;
+}
+
+/* 服：ギルチキの形で切り抜いて、乗算で重ねる（元の線が服の上に透けて見える） */
+.chiki-wear {
+  mix-blend-mode: multiply;
+  -webkit-mask: url(./giruchiki.png) center / contain no-repeat;
+  mask: url(./giruchiki.png) center / contain no-repeat;
+}
+
+/* 帽子・メガネなど：上にそのまま乗せる */
+.chiki-top {
+  z-index: 2;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+}
+
+/* 受け取れる贈り物があるときに、ギルチキの横に出すアイコン */
+.gift-mark {
+  position: absolute;
+  top: -8%;
+  right: -16%;
+  z-index: 4;
+  width: 40%;
+  height: 40%;
+  pointer-events: none;
+  animation: gift-bob 1.6s ease-in-out infinite;
+}
+
+.gift-mark svg { display: block; width: 100%; height: 100%; }
+
+@keyframes gift-bob {
+  0%, 100% { transform: translateY(0) rotate(-6deg); }
+  50% { transform: translateY(-12%) rotate(6deg); }
 }
 
 /* ホームのあいさつ欄（新しい定義は下のガチャの節の近くにまとめてある） */
@@ -2344,8 +2387,13 @@ body.gate-open { overflow: hidden; }
 .cos-thumb {
   display: grid;
   place-items: center;
-  height: 52px;
+  height: 72px;
   margin-bottom: 6px;
+}
+
+.cos-thumb .chiki {
+  width: 64px;
+  height: 64px;
 }
 
 .cos-thumb-none {
@@ -2375,11 +2423,12 @@ body.gate-open { overflow: hidden; }
   text-overflow: ellipsis;
 }
 
-.cos-rarity {
+/* イベントで配った限定品の印 */
+.cos-limited {
   display: block;
   margin-top: 2px;
-  font-size: 11px;
-  color: var(--yolk);
+  font-size: 10px;
+  color: var(--muted);
 }
 
 .cos-badge {
@@ -2399,18 +2448,58 @@ body.gate-open { overflow: hidden; }
   text-align: center;
 }
 
-.gr-rarity {
-  margin: 0 0 8px;
-  color: var(--yolk);
-  font-size: 15px;
-}
-
 .gr-thumb {
   display: grid;
   place-items: center;
-  height: 90px;
-  margin: 0 auto 8px;
+  height: 130px;
+  margin: 8px auto 8px;
 }
+
+.gr-thumb .chiki {
+  width: 120px;
+  height: 120px;
+}
+
+.gr-thumb-big { height: 170px; }
+.gr-thumb-big .chiki { width: 160px; height: 160px; }
+
+.event-result .btn + .btn { margin-top: 8px; }
+
+/* ガチャ画面：イベントの贈り物を受け取る欄 */
+.event-card {
+  position: relative;
+  margin: 0 0 16px;
+  padding: 16px 16px 14px;
+  border: 1px solid #6B4FA0;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(107, 79, 160, 0.22), rgba(240, 138, 36, 0.10));
+  text-align: center;
+}
+
+.event-gift {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 30px;
+  height: 30px;
+  animation: gift-bob 1.6s ease-in-out infinite;
+}
+
+.event-gift svg { display: block; width: 100%; height: 100%; }
+
+.event-figure .chiki {
+  width: 110px;
+  height: 110px;
+}
+
+.event-name {
+  margin: 6px 0 2px;
+  font-family: var(--mincho);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.event-card .hint { margin: 0 0 10px; }
 
 .gr-name {
   margin: 0 0 10px;
