@@ -436,6 +436,8 @@ function rerenderForLogin() {
 cloud.watchAuth(async (user) => {
   me.user = user;
   me.profile = null;
+  // 画面の表示を優先して、通知の宛先の確認は少し後に回す
+  if (user) setTimeout(() => refreshFcmToken(user), 3000);
   // 端末に残っているプロフィールがあれば、通信を待たずにそれで先に画面を出す。
   // （以前は毎回サーバーからプロフィールを読み終わるまで「確認しています…」のままで、
   //   通知から開いたときなどに表示が遅く感じる原因になっていた）
@@ -578,7 +580,7 @@ function openAvatarMenu(anchor) {
     if (event.target.dataset.am === 'logout') {
       close();
       if (!confirm('ログアウトしますか？')) return;
-      await cloud.signOutUser();
+      await signOutAndForgetToken();
       toast('ログアウトしました');
       return;
     }
@@ -1046,6 +1048,56 @@ async function enableNotificationsNow() {
   await cloud.saveFcmToken(me.user.uid, token);
   localStorage.setItem(FCM_TOKEN_KEY, token);
   return 'ok';
+}
+
+// この端末で通知が本当に有効か。
+// 以前は「宛先を保存したことがあるか」だけで判断していたため、
+// あとからiPhone側で許可が外れても（設定で切った・OSに外された など）「有効です」と出たままで、
+// 有効にし直すボタンも出てこなかった。許可が今も出ているかも合わせて見る。
+function notificationsOn() {
+  return Boolean(localStorage.getItem(FCM_TOKEN_KEY))
+    && typeof Notification !== 'undefined'
+    && Notification.permission === 'granted';
+}
+
+// 起動したとき（ログインが確認できたとき）に、通知の宛先を取り直す。
+// 宛先はOSやブラウザの都合で変わることがあり、以前は「通知を有効にする」を
+// 押したときに1回取るだけだったので、変わったあとは古い宛先に送り続けて届かなくなっていた。
+//   ・変わっていたら、新しい宛先を保存して、古い宛先は消す
+//   ・変わっていなくても、プロフィールに入っていなければ入れ直す
+//     （送れなかった宛先をサーバー側で消した場合や、ログアウトして入り直した場合）
+// 通知を一度も有効にしていない端末では、勝手に有効にはしない。
+async function refreshFcmToken(user) {
+  if (!user || !notificationsOn()) return;
+  try {
+    if (!(await notificationsAvailable())) return;
+    const reg = await navigator.serviceWorker.ready;
+    const token = await cloud.getFcmToken(VAPID_KEY, reg);
+    if (!token || me.user !== user) return;
+    const oldToken = localStorage.getItem(FCM_TOKEN_KEY);
+    const saved = me.profile?.fcmTokens ?? [];
+    if (token !== oldToken || !saved.includes(token)) {
+      await cloud.saveFcmToken(user.uid, token);
+      localStorage.setItem(FCM_TOKEN_KEY, token);
+      if (me.profile) me.profile = { ...me.profile, fcmTokens: [...new Set([...saved, token])] };
+    }
+    if (oldToken && token !== oldToken) {
+      await cloud.removeFcmToken(user.uid, oldToken).catch((err) => console.error(err));
+    }
+  } catch (err) {
+    console.error('通知の宛先を確かめられませんでした', err);
+  }
+}
+
+// ログアウトする。この端末の宛先をプロフィールから外してから抜ける。
+// （外さないと、ログアウトしたあとも前のアカウントの通知がこの端末に届いてしまう）
+// 端末側の記録は残しておくので、またログインしたときは refreshFcmToken が入れ直す。
+async function signOutAndForgetToken() {
+  const token = localStorage.getItem(FCM_TOKEN_KEY);
+  if (me.user && token) {
+    await cloud.removeFcmToken(me.user.uid, token).catch((err) => console.error(err));
+  }
+  await cloud.signOutUser();
 }
 // 点数を4段階に分ける
 function faceTier(score) {
@@ -1684,7 +1736,7 @@ async function renderNews() {
   // 通知がまだ有効になっていない人にだけ、ここからも有効にできるようにする
   const canOfferNotif = me.user
     && await notificationsAvailable()
-    && !localStorage.getItem(FCM_TOKEN_KEY)
+    && !notificationsOn()
     && Notification.permission !== 'denied';
 
   if (!alive()) return;
@@ -5180,7 +5232,7 @@ async function renderSettings() {
       notifState.textContent = VAPID_KEY === '__VAPID_KEY__'
         ? '準備中です（設定がまだ完了していません）'
         : 'この端末・この開き方では通知に対応していません。ホーム画面に追加したアイコンから開いてください。';
-    } else if (savedToken) {
+    } else if (savedToken && Notification.permission === 'granted') {
       notifState.textContent = '有効です';
       notifToggles.hidden = false;
     } else if (Notification.permission === 'denied') {
@@ -5851,7 +5903,7 @@ function renderProfileForm(slot, user, profile, myCount = 0) {
 
   $('#pf-logout').onclick = async () => {
     if (!confirm('ログアウトしますか？')) return;
-    await cloud.signOutUser();
+    await signOutAndForgetToken();
     renderAccount();
   };
 }

@@ -348,6 +348,14 @@ export async function enableNotifications(vapidKey, swRegistration) {
   return m.getToken(m.getMessaging(app), { vapidKey, serviceWorkerRegistration: swRegistration });
 }
 
+// すでに通知が許可されている端末で、今の宛先（トークン）を取り直す。
+// 許可を求める画面は出さない（許可済みのときだけ呼ぶ）。
+// 宛先はOSやブラウザの都合で変わることがあるので、起動のたびにこれで確かめる
+export async function getFcmToken(vapidKey, swRegistration) {
+  const { app, m } = await messaging();
+  return m.getToken(m.getMessaging(app), { vapidKey, serviceWorkerRegistration: swRegistration });
+}
+
 // 発行した宛先を、自分のプロフィールに覚えておく（複数端末ぶん配列で持つ）
 export async function saveFcmToken(uid, token) {
   const { db, f } = await store();
